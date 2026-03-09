@@ -622,12 +622,33 @@ def download_subtitles(url: str, lang: str = "en,ja", outdir: str | None = None)
             clean = srt_to_text(raw)
             if clean.strip():
                 subtitles[lc] = clean
-                # 整形済みテキストを .m ファイルとして保存
-                dest_filename = f"{safe_title}.{lc}.m"
-                dest_path = os.path.join(outdir, dest_filename)
-                with open(dest_path, "w", encoding="utf-8") as mf:
-                    mf.write(clean)
-                print(f"    ✅ {lc}: {len(clean)}文字 → {dest_filename}")
+                # .md 保存
+                md_filename = f"{safe_title}.{lc}.md"
+                md_path = os.path.join(outdir, md_filename)
+                with open(md_path, "w", encoding="utf-8") as mf:
+                    mf.write(f"# {video_title}\n\n")
+                    mf.write(f"**言語**: {lc}  \n")
+                    mf.write(f"**文字数**: {len(clean)}  \n\n")
+                    mf.write("---\n\n")
+                    mf.write(clean + "\n")
+                # .html 保存
+                html_filename = f"{safe_title}.{lc}.html"
+                html_path = os.path.join(outdir, html_filename)
+                html_lines = "".join(f"<p>{line}</p>\n" for line in clean.splitlines() if line.strip())
+                with open(html_path, "w", encoding="utf-8") as hf:
+                    hf.write(f"""<!DOCTYPE html>
+<html lang="{lc}">
+<head>
+<meta charset="utf-8">
+<title>{video_title}</title>
+<style>body{{font-family:sans-serif;max-width:800px;margin:2em auto;line-height:1.8}}p{{margin:.4em 0}}</style>
+</head>
+<body>
+<h1>{video_title}</h1>
+{html_lines}</body>
+</html>
+""")
+                print(f"    ✅ {lc}: {len(clean)}文字 → {md_filename} / {html_filename}")
     shutil.rmtree(tmpdir, ignore_errors=True)
 
     if not subtitles:
