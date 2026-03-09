@@ -561,9 +561,10 @@ def download_video(url: str, outdir: str, title: str = "") -> str | None:
 # ============================================================
 # 字幕ダウンロード
 # ============================================================
-def download_subtitles(url: str, lang: str = "en,ja", outdir: str | None = None) -> dict[str, str]:
+def download_subtitles(url: str, lang: str = "en", outdir: str | None = None,
+                       model: str = DEFAULT_MODEL, api_key: str = "") -> dict[str, str]:
     """
-    【改造】SRTファイルを outdir に保存しつつ、テキスト辞書も返す
+    字幕をダウンロードし、OpenRouter LLMで整形して .md / .html として保存する
     """
     if outdir is None:
         outdir = tempfile.mkdtemp(prefix="ytsub_")
@@ -621,20 +622,24 @@ def download_subtitles(url: str, lang: str = "en,ja", outdir: str | None = None)
                 raw = fh.read()
             clean = srt_to_text(raw)
             if clean.strip():
-                subtitles[lc] = clean
+                # LLMで整形（APIキーがある場合）
+                formatted = format_subtitle_with_llm(clean, lc, video_title, model, api_key) if api_key else clean
+                subtitles[lc] = formatted
                 # .md 保存
                 md_filename = f"{safe_title}.{lc}.md"
                 md_path = os.path.join(outdir, md_filename)
                 with open(md_path, "w", encoding="utf-8") as mf:
                     mf.write(f"# {video_title}\n\n")
                     mf.write(f"**言語**: {lc}  \n")
-                    mf.write(f"**文字数**: {len(clean)}  \n\n")
+                    mf.write(f"**文字数**: {len(formatted)}  \n\n")
                     mf.write("---\n\n")
-                    mf.write(clean + "\n")
+                    mf.write(formatted + "\n")
                 # .html 保存
                 html_filename = f"{safe_title}.{lc}.html"
                 html_path = os.path.join(outdir, html_filename)
-                html_lines = "".join(f"<p>{line}</p>\n" for line in clean.splitlines() if line.strip())
+                html_paras = "".join(
+                    f"<p>{line}</p>\n" for line in formatted.splitlines() if line.strip()
+                )
                 with open(html_path, "w", encoding="utf-8") as hf:
                     hf.write(f"""<!DOCTYPE html>
 <html lang="{lc}">
@@ -645,10 +650,10 @@ def download_subtitles(url: str, lang: str = "en,ja", outdir: str | None = None)
 </head>
 <body>
 <h1>{video_title}</h1>
-{html_lines}</body>
+{html_paras}</body>
 </html>
 """)
-                print(f"    ✅ {lc}: {len(clean)}文字 → {md_filename} / {html_filename}")
+                print(f"    ✅ {lc}: {len(formatted)}文字 → {md_filename} / {html_filename}")
     shutil.rmtree(tmpdir, ignore_errors=True)
 
     if not subtitles:
@@ -707,6 +712,42 @@ def srt_to_text(content):
         if line and line not in seen:
             seen.add(line); lines.append(line)
     return "\n".join(lines)
+
+
+def format_subtitle_with_llm(raw_text: str, lang: str, title: str, model: str, api_key: str) -> str:
+    """OpenRouter LLMで字幕テキストを読みやすく整形する"""
+    lang_label = "English" if lang.startswith("en") else "Japanese" if lang.startswith("ja") else lang
+    prompt = f"""以下はYouTube動画「{title}」の{lang_label}字幕テキストです。
+自動生成字幕のため、文の途中で改行されていたり重複があります。
+
+以下のルールで整形してください：
+- 文章として自然な段落に整理する
+- 重複している行を除去する
+- 意味の区切りで段落を分ける（空行を入れる）
+- タイムスタンプや番号は除去済みなのでそのまま使う
+- 内容は一切変えず、整形のみ行う
+- 出力は整形後のテキストのみ（説明文不要）
+
+--- 字幕テキスト ---
+{raw_text[:8000]}
+"""
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 4000,
+        "temperature": 0.1,
+    }
+    print(f"  ✏️  字幕整形中 (LLM)...")
+    try:
+        resp = requests.post("https://openrouter.ai/api/v1/chat/completions",
+                             headers=headers, json=payload, timeout=120)
+        if resp.status_code == 200:
+            return resp.json()["choices"][0]["message"]["content"].strip()
+        print(f"  ⚠ LLM整形エラー: {resp.status_code} → 元テキストを使用")
+    except Exception as e:
+        print(f"  ⚠ LLM整形失敗: {e} → 元テキストを使用")
+    return raw_text
 
 
 # ============================================================
@@ -1319,7 +1360,7 @@ def process_single_video(url: str, video_info: dict, mode: str, model: str,
     # 字幕＋LLM
     if mode in ("sub", "both"):
         # 【改造】字幕SRTファイルも日付フォルダへ保存
-        subtitles = download_subtitles(url, lang=lang, outdir=outdir)
+        subtitles = download_subtitles(url, lang=lang, outdir=outdir, model=model, api_key=api_key)
 
         if subtitles:
             db.upsert_video(video_id,
