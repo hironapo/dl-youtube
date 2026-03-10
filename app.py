@@ -1103,10 +1103,11 @@ def api_download():
     if not urls:
         return jsonify({'error': 'URLが空です'}), 400
 
-    mode   = data.get('mode', 'both')     # both / video / sub
-    model  = data.get('model', 'deepseek/deepseek-chat')
-    top_n  = str(data.get('top_n', 3))
-    lang   = data.get('lang', 'en,ja')
+    mode        = data.get('mode', 'both')     # both / video / sub
+    model       = data.get('model', 'deepseek/deepseek-chat')
+    top_n       = str(data.get('top_n', 3))
+    lang        = data.get('lang', 'en,ja')
+    auto_phrases = data.get('auto_phrases', False)  # デフォルトOFF
 
     cmd = ['python3', SCRIPT] + urls + [
         f'--{mode}',
@@ -1115,6 +1116,8 @@ def api_download():
         '--lang', lang,
         '--outdir', OUTDIR,
     ]
+    if not auto_phrases:
+        cmd.append('--no-auto-phrases')
 
     job_id = str(uuid.uuid4())[:8]
     with _jobs_lock:

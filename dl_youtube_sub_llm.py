@@ -2068,7 +2068,7 @@ JSON形式のみで返答: {{"selected": [1,3,5,...]}} (選んだ番号のリス
 # ============================================================
 def process_single_video(url: str, video_info: dict, mode: str, model: str,
                          api_key: str, lang: str, outdir: str, top_n: int,
-                         db: PhraseDB) -> dict | None:
+                         db: PhraseDB, auto_phrases: bool = False) -> dict | None:
     """
     【改造】outdir は日付フォルダ込みのパス。
     動画・字幕・MDすべてこのフォルダに保存する。
@@ -2119,10 +2119,13 @@ def process_single_video(url: str, video_info: dict, mode: str, model: str,
 
                 phrases = parse_phrases_from_llm(llm_result)
                 if phrases:
-                    db.add_phrases(video_id, phrases)
-                    print(f"  📚 {len(phrases)}フレーズをDBに登録")
-                    if api_key:
-                        prefetch_phrase_explanations(db, video_id, phrases, model, api_key)
+                    if auto_phrases:
+                        db.add_phrases(video_id, phrases)
+                        print(f"  📚 {len(phrases)}フレーズをDBに登録")
+                        if api_key:
+                            prefetch_phrase_explanations(db, video_id, phrases, model, api_key)
+                    else:
+                        print(f"  📚 {len(phrases)}フレーズを抽出（自動登録OFF）")
 
                 topics = parse_topics_from_llm(llm_result)
                 if topics:
@@ -2193,6 +2196,7 @@ def main():
                         help="出力先ルートディレクトリ（この下にYYYYMMDDフォルダが作成される）")
     parser.add_argument("--top", type=int, default=3)
     parser.add_argument("--no-playlist", action="store_true")
+    parser.add_argument("--no-auto-phrases", action="store_true", help="フレーズ自動登録を無効化")
     parser.add_argument("--db", default=None, help="DBファイルパス")
 
     # DB管理コマンド
@@ -2354,6 +2358,7 @@ def main():
                 api_key=api_key, lang=args.lang,
                 outdir=dated_outdir,
                 top_n=args.top, db=_db,
+                auto_phrases=not args.no_auto_phrases,
             )
         finally:
             _db.close()
