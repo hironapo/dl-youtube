@@ -477,6 +477,20 @@ def api_delete_phrase(pid):
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/phrases/all', methods=['DELETE'])
+def api_delete_all_phrases():
+    """全フレーズ削除"""
+    try:
+        conn = get_db()
+        conn.execute("DELETE FROM phrase_links")
+        conn.execute("DELETE FROM phrases")
+        conn.commit()
+        conn.close()
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 # ─────────────────────────────────────────────
 # プリフェッチ API
 # ─────────────────────────────────────────────
@@ -689,22 +703,22 @@ def api_video_comments(video_id):
         return _translate_sub_with_llm(video_id)
 
 
-def _translate_sub_with_llm(video_id: str):
-    """英語字幕をOpenRouterで日本語翻訳してDBに保存"""
+def _translate_sub_to_ja(video_id: str) -> dict:
+    """英語字幕をOpenRouterで日本語翻訳してDBに保存（Flaskコンテキスト不要）"""
     api_key = os.environ.get('OPENROUTER_API_KEY', '')
     model = 'anthropic/claude-3-haiku'
     if not api_key:
-        return jsonify({'error': 'OPENROUTER_API_KEY が未設定です'}), 400
+        return {'error': 'OPENROUTER_API_KEY が未設定です'}
 
     try:
         conn = get_db()
         row = conn.execute("SELECT subtitle_en FROM videos WHERE video_id=?", (video_id,)).fetchone()
         conn.close()
         if not row or not row['subtitle_en']:
-            return jsonify({'error': '英語字幕がDBにありません'}), 404
+            return {'error': '英語字幕がDBにありません'}
         en_text = row['subtitle_en']
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return {'error': str(e)}
 
     if '-->' in en_text:
         subs = parse_srt(en_text)
@@ -721,7 +735,7 @@ def _translate_sub_with_llm(video_id: str):
                 t += d + 0.5
 
     if not subs:
-        return jsonify({'error': '字幕データなし'}), 404
+        return {'error': '字幕データなし'}
 
     numbered = '\n'.join(f"{i+1}. {s['text']}" for i, s in enumerate(subs))
     prompt = f"""以下の英語字幕を番号順に日本語訳してください。
@@ -745,12 +759,12 @@ def _translate_sub_with_llm(video_id: str):
         resp.raise_for_status()
         content = resp.json()['choices'][0]['message']['content']
     except Exception as e:
-        return jsonify({'error': f'LLM翻訳失敗: {e}'}), 500
+        return {'error': f'LLM翻訳失敗: {e}'}
 
-    import re as _re
+    import re as _re2
     ja_lines = {}
     for line in content.strip().splitlines():
-        m = _re.match(r'^(\d+)\.\s*(.+)', line.strip())
+        m = _re2.match(r'^(\d+)\.\s*(.+)', line.strip())
         if m:
             ja_lines[int(m.group(1))] = m.group(2).strip()
 
@@ -775,7 +789,24 @@ def _translate_sub_with_llm(video_id: str):
     except Exception:
         pass
 
-    return jsonify({'ok': True, 'count': len(result_subs), 'subtitles': result_subs, 'source': 'llm'})
+    return {'ok': True, 'count': len(result_subs)}
+
+
+def _translate_sub_with_llm(video_id: str):
+    """英語字幕をOpenRouterで日本語翻訳してDBに保存（Flask API用）"""
+    result = _translate_sub_to_ja(video_id)
+    if 'error' in result:
+        code = 400 if 'API_KEY' in result['error'] else 404 if 'なし' in result['error'] else 500
+        return jsonify(result), code
+    # result_subs を再構築してレスポンスに含める
+    try:
+        conn = get_db()
+        row = conn.execute("SELECT subtitle_ja FROM videos WHERE video_id=?", (video_id,)).fetchone()
+        conn.close()
+        subs = parse_srt(row['subtitle_ja']) if row and row['subtitle_ja'] else []
+    except Exception:
+        subs = []
+    return jsonify({'ok': True, 'count': result.get('count', 0), 'subtitles': subs, 'source': 'llm'})
 
 
 # ─────────────────────────────────────────────
@@ -1037,6 +1068,24 @@ def _run_download(job_id: str, cmd: list[str]):
             q.put(line)
         proc.wait()
         status = 'done' if proc.returncode == 0 else 'error'
+        # DL完了後、JA字幕が空の動画を自動翻訳
+        if status == 'done' and db_exists():
+            try:
+                conn = get_db()
+                no_ja = conn.execute(
+                    "SELECT video_id FROM videos WHERE subtitle_en != '' AND (subtitle_ja IS NULL OR subtitle_ja='')"
+                ).fetchall()
+                conn.close()
+                for row in no_ja:
+                    vid = row['video_id']
+                    q.put(f'🌐 日本語訳を自動取得中: {vid}')
+                    _jobs[job_id]['log'].append(f'🌐 日本語訳を自動取得中: {vid}')
+                    res = _translate_sub_to_ja(vid)
+                    msg = f'  ✅ 日本語訳完了: {res.get("count", 0)}行' if 'ok' in res else f'  ⚠️ 翻訳スキップ: {res.get("error","")}'
+                    q.put(msg)
+                    _jobs[job_id]['log'].append(msg)
+            except Exception as e:
+                q.put(f'[JA自動取得エラー] {e}')
     except Exception as e:
         _jobs[job_id]['log'].append(f'[ERROR] {e}')
         q.put(f'[ERROR] {e}')

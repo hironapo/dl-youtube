@@ -242,12 +242,33 @@ body {
 .diff-3 { background: #fde8e8; color: var(--red); }
 .sub-add-btn {
   opacity: 0; flex-shrink: 0; background: none; border: 1px solid var(--border);
-  color: var(--blue); width: 20px; height: 20px; border-radius: 50%;
+  color: var(--text-muted); width: 20px; height: 20px; border-radius: 50%;
   font-size: .75rem; cursor: pointer; line-height: 1; padding: 0;
   transition: all .15s; display: flex; align-items: center; justify-content: center;
 }
 .sub-line:hover .sub-add-btn { opacity: 1; }
 .sub-add-btn:hover { background: var(--navy); color: #fff; border-color: var(--navy); }
+
+/* 単語クリック / 選択ポップアップ */
+#word-popup {
+  position: fixed; display: none; z-index: 9999;
+  background: var(--navy); color: #fff; border-radius: 6px;
+  box-shadow: 0 4px 14px rgba(0,0,0,.35); flex-direction: column; overflow: hidden;
+  min-width: 180px;
+}
+#word-popup .wp-word {
+  padding: 7px 14px; font-size: .85rem; font-weight: 700;
+  border-bottom: 1px solid rgba(255,255,255,.15); background: rgba(255,255,255,.08);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 280px;
+}
+#word-popup button {
+  background: none; border: none; color: #fff; padding: 8px 14px;
+  text-align: left; cursor: pointer; font-size: .82rem; font-family: inherit;
+  display: flex; align-items: center; gap: 8px;
+}
+#word-popup button:hover { background: rgba(255,255,255,.12); }
+.sub-text .sw { cursor: pointer; border-radius: 2px; }
+.sub-text .sw:hover { background: rgba(0,85,170,.12); }
 
 /* 右パネル */
 #player-right {
@@ -853,6 +874,12 @@ body {
             padding:6px 12px;border-radius:4px;font-size:.76rem;font-weight:700;
             cursor:pointer;font-family:inherit;white-space:nowrap;flex-shrink:0">
           タグ別
+        </button>
+        <button onclick="clearAllVocab()" style="
+            background:#fff;border:1px solid var(--danger);color:var(--danger);
+            padding:6px 12px;border-radius:4px;font-size:.76rem;font-weight:700;
+            cursor:pointer;font-family:inherit;white-space:nowrap;flex-shrink:0">
+          🗑 全クリア
         </button>
         <button onclick="showNetworkView()" style="
             background:#fff;border:1px solid var(--border);color:var(--text-dim);
@@ -1466,7 +1493,27 @@ function renderSubtitleList() {
     textEl.className = 'sub-body';
     const textSpan = document.createElement('span');
     textSpan.className = 'sub-text';
-    textSpan.textContent = s.text;
+    // 単語を<span class="sw">で分割してクリック可能に
+    textSpan.innerHTML = s.text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .split(/(\s+)/).map(t => t.trim() ? `<span class="sw">${t}</span>` : t).join('');
+    // 単語クリック
+    textSpan.addEventListener('click', e => {
+      const sw = e.target.closest('.sw');
+      if (!sw) return;
+      e.stopPropagation();
+      showWordPopup(sw.textContent.replace(/[^\w''-]/g, '').trim() || sw.textContent.trim(), e.clientX, e.clientY, s.text);
+    });
+    // フレーズ選択（mouseup）
+    textSpan.addEventListener('mouseup', e => {
+      setTimeout(() => {
+        const sel = window.getSelection();
+        const selected = sel ? sel.toString().trim() : '';
+        if (selected.length > 1) {
+          e.stopPropagation();
+          showWordPopup(selected, e.clientX, e.clientY, s.text);
+        }
+      }, 10);
+    });
     textEl.appendChild(textSpan);
 
     // 右列（EN+JAモード時のみJA表示）
@@ -1490,7 +1537,7 @@ function renderSubtitleList() {
     addBtn.className = 'sub-add-btn';
     addBtn.title = 'フレーズ登録';
     addBtn.textContent = '+';
-    addBtn.onclick = (e) => { e.stopPropagation(); openAddPhraseModal(null, s.text); };
+    addBtn.onclick = (e) => { e.stopPropagation(); openAddPhraseModal(null, ''); };
 
     div.appendChild(timeEl);
     div.appendChild(textEl);
@@ -1704,6 +1751,13 @@ async function deletePhrase(id, btn) {
   if (!confirm('このフレーズを削除しますか？')) return;
   await apiFetch(`/api/phrases/${id}`, 'DELETE');
   btn.closest('.phrase-card').remove();
+}
+
+async function clearAllVocab() {
+  if (!confirm('ボキャブラリーを全件削除しますか？\nこの操作は元に戻せません。')) return;
+  const r = await apiFetch('/api/phrases/all', 'DELETE');
+  if (r.success) loadVocab();
+  else alert('削除に失敗しました: ' + (r.error || ''));
 }
 
 // ─────────────────────────────────────────────
@@ -2921,6 +2975,44 @@ async function loadRecentVideos() {
 }
 
 // ─────────────────────────────────────────────
+// 単語/フレーズ クリックポップアップ
+// ─────────────────────────────────────────────
+(function() {
+  const popup = document.getElementById('word-popup');
+  let _context = '';
+
+  window.showWordPopup = function(word, cx, cy, context) {
+    _context = context || '';
+    document.getElementById('wp-word').textContent = word;
+    popup.style.display = 'flex';
+    // 画面端に収まるよう位置調整
+    const pw = popup.offsetWidth || 200;
+    const ph = popup.offsetHeight || 80;
+    let left = cx + 8;
+    let top  = cy + 8;
+    if (left + pw > window.innerWidth  - 8) left = cx - pw - 8;
+    if (top  + ph > window.innerHeight - 8) top  = cy - ph - 8;
+    popup.style.left = Math.max(4, left) + 'px';
+    popup.style.top  = Math.max(4, top)  + 'px';
+  };
+
+  document.getElementById('wp-btn-explain').onclick = () => {
+    const word = document.getElementById('wp-word').textContent;
+    popup.style.display = 'none';
+    explainText(word, _context);
+  };
+  document.getElementById('wp-btn-register').onclick = () => {
+    const word = document.getElementById('wp-word').textContent;
+    popup.style.display = 'none';
+    openAddPhraseModal(null, word);
+  };
+  // 外側クリックで閉じる
+  document.addEventListener('mousedown', e => {
+    if (!popup.contains(e.target)) popup.style.display = 'none';
+  });
+})();
+
+// ─────────────────────────────────────────────
 // 初期化
 // ─────────────────────────────────────────────
 async function init() {
@@ -2931,5 +3023,12 @@ async function init() {
 
 init();
 </script>
+
+<!-- 単語/フレーズ ポップアップ -->
+<div id="word-popup">
+  <div class="wp-word" id="wp-word"></div>
+  <button id="wp-btn-explain">🔍 解説</button>
+  <button id="wp-btn-register">📌 登録</button>
+</div>
 </body>
 </html>
