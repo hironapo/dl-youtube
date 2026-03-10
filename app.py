@@ -14,12 +14,19 @@ import subprocess
 import threading
 import uuid
 import requests as req_lib
+from contextlib import contextmanager
 from pathlib import Path
 from flask import Flask, render_template, jsonify, request, send_file, abort, Response, stream_with_context
 from dotenv import load_dotenv
 
 # .env ファイルがあれば読み込む（OPENROUTER_API_KEY など）
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env'))
+
+# ─── HTTP セッション（接続プール・リトライ付き）────────────────────
+_http_session = req_lib.Session()
+_http_adapter = req_lib.adapters.HTTPAdapter(pool_connections=4, pool_maxsize=8, max_retries=2)
+_http_session.mount('https://', _http_adapter)
+_http_session.mount('http://', _http_adapter)
 
 app = Flask(__name__)
 
@@ -51,6 +58,16 @@ def get_db():
     return conn
 
 
+@contextmanager
+def db_conn():
+    """SQLite接続をコンテキストマネージャで管理（必ずcloseされる）"""
+    conn = get_db()
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
 def db_exists():
     return os.path.exists(DB_PATH)
 
@@ -60,32 +77,31 @@ def migrate_db():
     if not db_exists():
         return
     try:
-        conn = get_db()
-        # explanation カラムがなければ追加
-        cols = [r[1] for r in conn.execute("PRAGMA table_info(phrases)").fetchall()]
-        if 'explanation' not in cols:
-            conn.execute("ALTER TABLE phrases ADD COLUMN explanation TEXT DEFAULT ''")
+        with db_conn() as conn:
+            # explanation カラムがなければ追加
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(phrases)").fetchall()]
+            if 'explanation' not in cols:
+                conn.execute("ALTER TABLE phrases ADD COLUMN explanation TEXT DEFAULT ''")
+                conn.commit()
+                print("DB migrated: phrases.explanation added")
+            # tags カラムがなければ追加
+            if 'tags' not in cols:
+                conn.execute("ALTER TABLE phrases ADD COLUMN tags TEXT DEFAULT ''")
+                conn.commit()
+                print("DB migrated: phrases.tags added")
+            # video_comments テーブル作成
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS video_comments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    video_id TEXT NOT NULL,
+                    author TEXT DEFAULT '',
+                    text TEXT NOT NULL,
+                    likes INTEGER DEFAULT 0,
+                    explanation TEXT DEFAULT '',
+                    created_at TEXT DEFAULT (datetime('now', 'localtime'))
+                )
+            """)
             conn.commit()
-            print("DB migrated: phrases.explanation added")
-        # tags カラムがなければ追加
-        if 'tags' not in cols:
-            conn.execute("ALTER TABLE phrases ADD COLUMN tags TEXT DEFAULT ''")
-            conn.commit()
-            print("DB migrated: phrases.tags added")
-        # video_comments テーブル作成
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS video_comments (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                video_id TEXT NOT NULL,
-                author TEXT DEFAULT '',
-                text TEXT NOT NULL,
-                likes INTEGER DEFAULT 0,
-                explanation TEXT DEFAULT '',
-                created_at TEXT DEFAULT (datetime('now', 'localtime'))
-            )
-        """)
-        conn.commit()
-        conn.close()
     except Exception as e:
         print(f"DB migration warning: {e}")
 
@@ -147,12 +163,11 @@ def api_dates():
     # DB から created_at 別に動画数を補完（フォルダにmp4がない場合も表示）
     if db_exists():
         try:
-            conn = get_db()
-            rows = conn.execute(
-                "SELECT REPLACE(SUBSTR(created_at,1,10),'-','') AS d, COUNT(*) AS c "
-                "FROM videos GROUP BY d"
-            ).fetchall()
-            conn.close()
+            with db_conn() as conn:
+                rows = conn.execute(
+                    "SELECT REPLACE(SUBSTR(created_at,1,10),'-','') AS d, COUNT(*) AS c "
+                    "FROM videos GROUP BY d"
+                ).fetchall()
             for row in rows:
                 d = row['d']
                 if re.match(r'^\d{8}$', d):
@@ -186,27 +201,26 @@ def api_videos_by_date(date):
             title = stem; channel = ''; video_id = None; duration = 0; url = ''
             if db_exists():
                 try:
-                    conn = get_db()
-                    row = conn.execute(
-                        "SELECT video_id, title, channel, duration, url FROM videos "
-                        "WHERE video_path LIKE ? ORDER BY created_at DESC LIMIT 1",
-                        (f'%{stem}%',)
-                    ).fetchone()
-                    # video_path が一致しない場合はtitle(stem)で照合
-                    if not row:
+                    with db_conn() as conn:
                         row = conn.execute(
                             "SELECT video_id, title, channel, duration, url FROM videos "
-                            "WHERE REPLACE(REPLACE(title,' ',''),'_','') LIKE ? ORDER BY created_at DESC LIMIT 1",
-                            (f'%{stem[:20]}%',)
+                            "WHERE video_path LIKE ? ORDER BY created_at DESC LIMIT 1",
+                            (f'%{stem}%',)
                         ).fetchone()
-                    if row:
-                        video_id = row['video_id']; title = row['title']
-                        channel = row['channel']; duration = row['duration']
-                        url = row['url'] or ''
-                        # video_idもseen_stemsに追加して重複防止
-                        if video_id:
-                            seen_stems.add(video_id)
-                    conn.close()
+                        # video_path が一致しない場合はtitle(stem)で照合
+                        if not row:
+                            row = conn.execute(
+                                "SELECT video_id, title, channel, duration, url FROM videos "
+                                "WHERE REPLACE(REPLACE(title,' ',''),'_','') LIKE ? ORDER BY created_at DESC LIMIT 1",
+                                (f'%{stem[:20]}%',)
+                            ).fetchone()
+                        if row:
+                            video_id = row['video_id']; title = row['title']
+                            channel = row['channel']; duration = row['duration']
+                            url = row['url'] or ''
+                            # video_idもseen_stemsに追加して重複防止
+                            if video_id:
+                                seen_stems.add(video_id)
                 except Exception:
                     pass
             def _srt_path(lang_ext, local_path, vid_id):
@@ -229,13 +243,12 @@ def api_videos_by_date(date):
     if db_exists():
         try:
             date_str = f"{date[:4]}-{date[4:6]}-{date[6:8]}"
-            conn = get_db()
-            rows = conn.execute(
-                "SELECT video_id, title, channel, duration, url, video_path "
-                "FROM videos WHERE DATE(created_at) = ? ORDER BY created_at DESC",
-                (date_str,)
-            ).fetchall()
-            conn.close()
+            with db_conn() as conn:
+                rows = conn.execute(
+                    "SELECT video_id, title, channel, duration, url, video_path "
+                    "FROM videos WHERE DATE(created_at) = ? ORDER BY created_at DESC",
+                    (date_str,)
+                ).fetchall()
             for row in rows:
                 vp = row['video_path'] or ''
                 stem = Path(vp).stem if vp else row['video_id'] or ''
@@ -278,12 +291,11 @@ def api_video_phrases(video_id):
     if not db_exists():
         return jsonify([])
     try:
-        conn = get_db()
-        rows = conn.execute(
-            "SELECT * FROM phrases WHERE video_id = ? ORDER BY is_top DESC, id ASC",
-            (video_id,)
-        ).fetchall()
-        conn.close()
+        with db_conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM phrases WHERE video_id = ? ORDER BY is_top DESC, id ASC",
+                (video_id,)
+            ).fetchall()
         return jsonify([dict(r) for r in rows])
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -302,42 +314,41 @@ def api_all_phrases():
         return jsonify({'phrases': [], 'total': 0})
 
     try:
-        conn = get_db()
-        conditions = []
-        params_count = []
-        params_rows  = []
+        with db_conn() as conn:
+            conditions = []
+            params_count = []
+            params_rows  = []
 
-        if top_only:
-            conditions.append('p.is_top = 1')
+            if top_only:
+                conditions.append('p.is_top = 1')
 
-        if q:
-            like = f'%{q}%'
-            conditions.append(
-                '(p.phrase_en LIKE ? OR p.phrase_ja LIKE ? OR p.note LIKE ? OR p.explanation LIKE ? OR p.tags LIKE ?)'
-            )
-            params_count.extend([like, like, like, like, like])
-            params_rows.extend([like, like, like, like, like])
+            if q:
+                like = f'%{q}%'
+                conditions.append(
+                    '(p.phrase_en LIKE ? OR p.phrase_ja LIKE ? OR p.note LIKE ? OR p.explanation LIKE ? OR p.tags LIKE ?)'
+                )
+                params_count.extend([like, like, like, like, like])
+                params_rows.extend([like, like, like, like, like])
 
-        if tag:
-            tag_like = f'%{tag}%'
-            conditions.append('p.tags LIKE ?')
-            params_count.append(tag_like)
-            params_rows.append(tag_like)
+            if tag:
+                tag_like = f'%{tag}%'
+                conditions.append('p.tags LIKE ?')
+                params_count.append(tag_like)
+                params_rows.append(tag_like)
 
-        where = ('WHERE ' + ' AND '.join(conditions)) if conditions else ''
+            where = ('WHERE ' + ' AND '.join(conditions)) if conditions else ''
 
-        rows = conn.execute(
-            f"""SELECT p.*, v.title AS video_title FROM phrases p
-               LEFT JOIN videos v ON p.video_id = v.video_id
-               {where}
-               ORDER BY p.is_top DESC, p.created_at DESC
-               LIMIT ? OFFSET ?""",
-            params_rows + [per_page, (page - 1) * per_page]
-        ).fetchall()
-        total = conn.execute(
-            f"SELECT COUNT(*) FROM phrases p {where}", params_count
-        ).fetchone()[0]
-        conn.close()
+            rows = conn.execute(
+                f"""SELECT p.*, v.title AS video_title FROM phrases p
+                   LEFT JOIN videos v ON p.video_id = v.video_id
+                   {where}
+                   ORDER BY p.is_top DESC, p.created_at DESC
+                   LIMIT ? OFFSET ?""",
+                params_rows + [per_page, (page - 1) * per_page]
+            ).fetchall()
+            total = conn.execute(
+                f"SELECT COUNT(*) FROM phrases p {where}", params_count
+            ).fetchone()[0]
         return jsonify({'phrases': [dict(r) for r in rows], 'total': total})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -349,11 +360,10 @@ def api_phrases_tags():
     if not db_exists():
         return jsonify([])
     try:
-        conn = get_db()
-        rows = conn.execute(
-            "SELECT tags FROM phrases WHERE tags IS NOT NULL AND tags != ''"
-        ).fetchall()
-        conn.close()
+        with db_conn() as conn:
+            rows = conn.execute(
+                "SELECT tags FROM phrases WHERE tags IS NOT NULL AND tags != ''"
+            ).fetchall()
         tag_set = set()
         for row in rows:
             for t in (row['tags'] or '').split(','):
@@ -371,17 +381,16 @@ def api_phrase_video(pid):
     if not db_exists():
         return jsonify({'error': 'DB not found'}), 404
     try:
-        conn = get_db()
-        row = conn.execute(
-            """SELECT p.video_id, p.phrase_en,
-                      v.title, v.url, v.video_path, v.channel,
-                      v.created_at
-               FROM phrases p
-               LEFT JOIN videos v ON p.video_id = v.video_id
-               WHERE p.id = ?""",
-            (pid,)
-        ).fetchone()
-        conn.close()
+        with db_conn() as conn:
+            row = conn.execute(
+                """SELECT p.video_id, p.phrase_en,
+                          v.title, v.url, v.video_path, v.channel,
+                          v.created_at
+                   FROM phrases p
+                   LEFT JOIN videos v ON p.video_id = v.video_id
+                   WHERE p.id = ?""",
+                (pid,)
+            ).fetchone()
         if not row:
             return jsonify({'error': 'not found'}), 404
 
@@ -439,15 +448,14 @@ def api_create_phrase():
     if not db_exists():
         return jsonify({'error': 'DB not found'}), 500
     try:
-        conn = get_db()
-        cur = conn.execute(
-            "INSERT INTO phrases (video_id, phrase_en, phrase_ja, note, is_top) VALUES (?,?,?,?,?)",
-            (video_id, phrase_en, phrase_ja, note, is_top)
-        )
-        conn.commit()
-        pid = cur.lastrowid
-        row = dict(conn.execute("SELECT * FROM phrases WHERE id=?", (pid,)).fetchone())
-        conn.close()
+        with db_conn() as conn:
+            cur = conn.execute(
+                "INSERT INTO phrases (video_id, phrase_en, phrase_ja, note, is_top) VALUES (?,?,?,?,?)",
+                (video_id, phrase_en, phrase_ja, note, is_top)
+            )
+            conn.commit()
+            pid = cur.lastrowid
+            row = dict(conn.execute("SELECT * FROM phrases WHERE id=?", (pid,)).fetchone())
         return jsonify(row)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -456,13 +464,12 @@ def api_create_phrase():
 @app.route('/api/phrases/<int:pid>/toggle_top', methods=['POST'])
 def api_toggle_top(pid):
     try:
-        conn = get_db()
-        row = conn.execute("SELECT is_top FROM phrases WHERE id = ?", (pid,)).fetchone()
-        if row:
-            conn.execute("UPDATE phrases SET is_top = ? WHERE id = ?",
-                         (0 if row['is_top'] else 1, pid))
-            conn.commit()
-        conn.close()
+        with db_conn() as conn:
+            row = conn.execute("SELECT is_top FROM phrases WHERE id = ?", (pid,)).fetchone()
+            if row:
+                conn.execute("UPDATE phrases SET is_top = ? WHERE id = ?",
+                             (0 if row['is_top'] else 1, pid))
+                conn.commit()
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -471,10 +478,9 @@ def api_toggle_top(pid):
 @app.route('/api/phrases/<int:pid>', methods=['DELETE'])
 def api_delete_phrase(pid):
     try:
-        conn = get_db()
-        conn.execute("DELETE FROM phrases WHERE id = ?", (pid,))
-        conn.commit()
-        conn.close()
+        with db_conn() as conn:
+            conn.execute("DELETE FROM phrases WHERE id = ?", (pid,))
+            conn.commit()
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -484,11 +490,10 @@ def api_delete_phrase(pid):
 def api_delete_all_phrases():
     """全フレーズ削除"""
     try:
-        conn = get_db()
-        conn.execute("DELETE FROM phrase_links")
-        conn.execute("DELETE FROM phrases")
-        conn.commit()
-        conn.close()
+        with db_conn() as conn:
+            conn.execute("DELETE FROM phrase_links")
+            conn.execute("DELETE FROM phrases")
+            conn.commit()
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -521,11 +526,10 @@ def _run_prefetch(job_id: str):
     model = _prefetch_jobs[job_id].get('model', 'deepseek/deepseek-chat')
 
     try:
-        conn = get_db()
-        rows = conn.execute(
-            "SELECT id, phrase_en, note FROM phrases WHERE explanation IS NULL OR explanation = '' ORDER BY id"
-        ).fetchall()
-        conn.close()
+        with db_conn() as conn:
+            rows = conn.execute(
+                "SELECT id, phrase_en, note FROM phrases WHERE explanation IS NULL OR explanation = '' ORDER BY id"
+            ).fetchall()
     except Exception as e:
         with _prefetch_lock:
             _prefetch_jobs[job_id]['status'] = 'error'
@@ -548,13 +552,12 @@ def _run_prefetch(job_id: str):
             expl = _explain_phrase_openrouter(clean_en, note, model, api_key)
             if expl:
                 tags = auto_tag_phrase(clean_en, note, expl)
-                conn2 = get_db()
-                conn2.execute(
-                    "UPDATE phrases SET explanation=?, tags=? WHERE id=?",
-                    (_json.dumps(expl, ensure_ascii=False), tags, pid)
-                )
-                conn2.commit()
-                conn2.close()
+                with db_conn() as conn2:
+                    conn2.execute(
+                        "UPDATE phrases SET explanation=?, tags=? WHERE id=?",
+                        (_json.dumps(expl, ensure_ascii=False), tags, pid)
+                    )
+                    conn2.commit()
         except Exception:
             pass
         done += 1
@@ -611,26 +614,25 @@ def api_delete_video(video_id):
     if not db_exists():
         return jsonify({'error': 'DB not found'}), 500
     try:
-        conn = get_db()
-        row = conn.execute("SELECT video_path, title FROM videos WHERE video_id=?", (video_id,)).fetchone()
-        deleted_files = []
-        if row and row['video_path']:
-            vp = Path(row['video_path'])
-            stem = vp.stem
-            parent = vp.parent
-            for f in parent.glob(f"{stem}*"):
-                try:
-                    f.unlink()
-                    deleted_files.append(str(f))
-                except Exception:
-                    pass
-        # DBから削除（関連フレーズ・コメントも）
-        conn.execute("DELETE FROM phrase_links WHERE phrase_a IN (SELECT id FROM phrases WHERE video_id=?) OR phrase_b IN (SELECT id FROM phrases WHERE video_id=?)", (video_id, video_id))
-        conn.execute("DELETE FROM phrases WHERE video_id=?", (video_id,))
-        conn.execute("DELETE FROM video_comments WHERE video_id=?", (video_id,))
-        conn.execute("DELETE FROM videos WHERE video_id=?", (video_id,))
-        conn.commit()
-        conn.close()
+        with db_conn() as conn:
+            row = conn.execute("SELECT video_path, title FROM videos WHERE video_id=?", (video_id,)).fetchone()
+            deleted_files = []
+            if row and row['video_path']:
+                vp = Path(row['video_path'])
+                stem = vp.stem
+                parent = vp.parent
+                for f in parent.glob(f"{stem}*"):
+                    try:
+                        f.unlink()
+                        deleted_files.append(str(f))
+                    except Exception:
+                        pass
+            # DBから削除（関連フレーズ・コメントも）
+            conn.execute("DELETE FROM phrase_links WHERE phrase_a IN (SELECT id FROM phrases WHERE video_id=?) OR phrase_b IN (SELECT id FROM phrases WHERE video_id=?)", (video_id, video_id))
+            conn.execute("DELETE FROM phrases WHERE video_id=?", (video_id,))
+            conn.execute("DELETE FROM video_comments WHERE video_id=?", (video_id,))
+            conn.execute("DELETE FROM videos WHERE video_id=?", (video_id,))
+            conn.commit()
         return jsonify({'ok': True, 'deleted_files': deleted_files})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -647,9 +649,8 @@ def api_refresh_video_comments(video_id):
     data = request.json or {}
     model = data.get('model', 'anthropic/claude-3-haiku')
     try:
-        conn = get_db()
-        row = conn.execute("SELECT url FROM videos WHERE video_id=?", (video_id,)).fetchone()
-        conn.close()
+        with db_conn() as conn:
+            row = conn.execute("SELECT url FROM videos WHERE video_id=?", (video_id,)).fetchone()
         if not row or not row['url']:
             return jsonify({'error': '動画URLが見つかりません'}), 404
         url = row['url']
@@ -694,12 +695,11 @@ def api_video_comments(video_id):
     if not db_exists():
         return jsonify([])
     try:
-        conn = get_db()
-        rows = conn.execute(
-            "SELECT id, author, text, likes, explanation FROM video_comments WHERE video_id=? ORDER BY likes DESC",
-            (video_id,)
-        ).fetchall()
-        conn.close()
+        with db_conn() as conn:
+            rows = conn.execute(
+                "SELECT id, author, text, likes, explanation FROM video_comments WHERE video_id=? ORDER BY likes DESC",
+                (video_id,)
+            ).fetchall()
         return jsonify([dict(r) for r in rows])
     except Exception as e:
         # yt-dlp失敗時もLLM翻訳にフォールバック
@@ -714,9 +714,8 @@ def _translate_sub_to_ja(video_id: str) -> dict:
         return {'error': 'OPENROUTER_API_KEY が未設定です'}
 
     try:
-        conn = get_db()
-        row = conn.execute("SELECT subtitle_en FROM videos WHERE video_id=?", (video_id,)).fetchone()
-        conn.close()
+        with db_conn() as conn:
+            row = conn.execute("SELECT subtitle_en FROM videos WHERE video_id=?", (video_id,)).fetchone()
         if not row or not row['subtitle_en']:
             return {'error': '英語字幕がDBにありません'}
         en_text = row['subtitle_en']
@@ -753,7 +752,7 @@ def _translate_sub_to_ja(video_id: str) -> dict:
 ..."""
 
     try:
-        resp = req_lib.post(
+        resp = _http_session.post(
             'https://openrouter.ai/api/v1/chat/completions',
             headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},
             json={'model': model, 'messages': [{'role': 'user', 'content': prompt}], 'temperature': 0.2},
@@ -785,10 +784,9 @@ def _translate_sub_to_ja(video_id: str) -> dict:
 
     srt_text = '\n'.join(srt_parts)
     try:
-        conn = get_db()
-        conn.execute("UPDATE videos SET subtitle_ja=? WHERE video_id=?", (srt_text, video_id))
-        conn.commit()
-        conn.close()
+        with db_conn() as conn:
+            conn.execute("UPDATE videos SET subtitle_ja=? WHERE video_id=?", (srt_text, video_id))
+            conn.commit()
     except Exception:
         pass
 
@@ -803,9 +801,8 @@ def _translate_sub_with_llm(video_id: str):
         return jsonify(result), code
     # result_subs を再構築してレスポンスに含める
     try:
-        conn = get_db()
-        row = conn.execute("SELECT subtitle_ja FROM videos WHERE video_id=?", (video_id,)).fetchone()
-        conn.close()
+        with db_conn() as conn:
+            row = conn.execute("SELECT subtitle_ja FROM videos WHERE video_id=?", (video_id,)).fetchone()
         subs = parse_srt(row['subtitle_ja']) if row and row['subtitle_ja'] else []
     except Exception:
         subs = []
@@ -828,11 +825,10 @@ def api_fetch_all_ja_subs():
 
     def _do():
         try:
-            conn = get_db()
-            rows = conn.execute(
-                "SELECT video_id, url FROM videos WHERE url IS NOT NULL AND (subtitle_ja IS NULL OR subtitle_ja='')"
-            ).fetchall()
-            conn.close()
+            with db_conn() as conn:
+                rows = conn.execute(
+                    "SELECT video_id, url FROM videos WHERE url IS NOT NULL AND (subtitle_ja IS NULL OR subtitle_ja='')"
+                ).fetchall()
         except Exception:
             with _comment_jobs_lock:
                 _comment_jobs[job_id]['status'] = 'error'
@@ -845,7 +841,7 @@ def api_fetch_all_ja_subs():
         for i, row in enumerate(rows):
             vid = row['video_id']
             try:
-                resp = req_lib.post(
+                resp = _http_session.post(
                     f'http://localhost:5000/api/video/{vid}/fetch_ja_sub',
                     json={}, timeout=60
                 )
@@ -870,14 +866,13 @@ def api_network():
     if not db_exists():
         return jsonify({'nodes': [], 'links': []})
     try:
-        conn = get_db()
-        phrases = conn.execute(
-            "SELECT id, phrase_en, tags, explanation, is_top FROM phrases ORDER BY is_top DESC, id ASC"
-        ).fetchall()
-        links_rows = conn.execute(
-            "SELECT phrase_a, phrase_b, link_type FROM phrase_links"
-        ).fetchall()
-        conn.close()
+        with db_conn() as conn:
+            phrases = conn.execute(
+                "SELECT id, phrase_en, tags, explanation, is_top FROM phrases ORDER BY is_top DESC, id ASC"
+            ).fetchall()
+            links_rows = conn.execute(
+                "SELECT phrase_a, phrase_b, link_type FROM phrase_links"
+            ).fetchall()
 
         nodes = []
         for p in phrases:
@@ -902,62 +897,61 @@ def api_network_build():
     if not db_exists():
         return jsonify({'error': 'DB not found'}), 500
     try:
-        conn = get_db()
-        phrases = conn.execute(
-            "SELECT id, phrase_en, tags, explanation FROM phrases WHERE tags IS NOT NULL AND tags != ''"
-        ).fetchall()
+        with db_conn() as conn:
+            phrases = conn.execute(
+                "SELECT id, phrase_en, tags, explanation FROM phrases WHERE tags IS NOT NULL AND tags != ''"
+            ).fetchall()
 
-        # タグが一致するフレーズ同士を紐付け（既存を全削除して再生成）
-        conn.execute("DELETE FROM phrase_links")
-        inserted = 0
-        tag_map: dict[str, list[int]] = {}
-        for p in phrases:
-            for tag in (p['tags'] or '').split(','):
-                tag = tag.strip()
-                if tag:
-                    tag_map.setdefault(tag, []).append(p['id'])
+            # タグが一致するフレーズ同士を紐付け（既存を全削除して再生成）
+            conn.execute("DELETE FROM phrase_links")
+            inserted = 0
+            tag_map: dict[str, list[int]] = {}
+            for p in phrases:
+                for tag in (p['tags'] or '').split(','):
+                    tag = tag.strip()
+                    if tag:
+                        tag_map.setdefault(tag, []).append(p['id'])
 
-        seen_pairs: set[tuple] = set()
-        for tag, ids in tag_map.items():
-            for i in range(len(ids)):
-                for j in range(i + 1, len(ids)):
-                    a, b = min(ids[i], ids[j]), max(ids[i], ids[j])
-                    if (a, b) not in seen_pairs:
-                        seen_pairs.add((a, b))
-                        conn.execute(
-                            "INSERT INTO phrase_links (phrase_a, phrase_b, link_type) VALUES (?,?,?)",
-                            (a, b, f'tag:{tag}')
-                        )
-                        inserted += 1
-
-        # related フィールドからもリンク生成
-        for p in phrases:
-            if not p['explanation']:
-                continue
-            try:
-                expl = json.loads(p['explanation'])
-                related = expl.get('related', [])
-                for rel in related:
-                    rel_clean = re.sub(r'\*+', '', rel).strip().lower()
-                    # 類似フレーズをDB内で検索
-                    match = conn.execute(
-                        "SELECT id FROM phrases WHERE LOWER(REPLACE(REPLACE(phrase_en,'**',''),'*','')) LIKE ? LIMIT 1",
-                        (f'%{rel_clean[:15]}%',)
-                    ).fetchone()
-                    if match and match['id'] != p['id']:
-                        a, b = min(p['id'], match['id']), max(p['id'], match['id'])
+            seen_pairs: set[tuple] = set()
+            for tag, ids in tag_map.items():
+                for i in range(len(ids)):
+                    for j in range(i + 1, len(ids)):
+                        a, b = min(ids[i], ids[j]), max(ids[i], ids[j])
                         if (a, b) not in seen_pairs:
                             seen_pairs.add((a, b))
                             conn.execute(
                                 "INSERT INTO phrase_links (phrase_a, phrase_b, link_type) VALUES (?,?,?)",
-                                (a, b, 'related')
+                                (a, b, f'tag:{tag}')
                             )
                             inserted += 1
-            except Exception:
-                pass
 
-        conn.commit()
-        conn.close()
+            # related フィールドからもリンク生成
+            for p in phrases:
+                if not p['explanation']:
+                    continue
+                try:
+                    expl = json.loads(p['explanation'])
+                    related = expl.get('related', [])
+                    for rel in related:
+                        rel_clean = re.sub(r'\*+', '', rel).strip().lower()
+                        # 類似フレーズをDB内で検索
+                        match = conn.execute(
+                            "SELECT id FROM phrases WHERE LOWER(REPLACE(REPLACE(phrase_en,'**',''),'*','')) LIKE ? LIMIT 1",
+                            (f'%{rel_clean[:15]}%',)
+                        ).fetchone()
+                        if match and match['id'] != p['id']:
+                            a, b = min(p['id'], match['id']), max(p['id'], match['id'])
+                            if (a, b) not in seen_pairs:
+                                seen_pairs.add((a, b))
+                                conn.execute(
+                                    "INSERT INTO phrase_links (phrase_a, phrase_b, link_type) VALUES (?,?,?)",
+                                    (a, b, 'related')
+                                )
+                                inserted += 1
+                except Exception:
+                    pass
+
+            conn.commit()
         return jsonify({'ok': True, 'links_created': inserted})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -983,9 +977,8 @@ def _run_fetch_comments(job_id: str):
     model = _comment_jobs[job_id].get('model', 'deepseek/deepseek-chat')
 
     try:
-        conn = get_db()
-        rows = conn.execute("SELECT video_id, url FROM videos WHERE url IS NOT NULL").fetchall()
-        conn.close()
+        with db_conn() as conn:
+            rows = conn.execute("SELECT video_id, url FROM videos WHERE url IS NOT NULL").fetchall()
     except Exception as e:
         with _comment_jobs_lock:
             _comment_jobs[job_id]['status'] = 'error'
@@ -1074,11 +1067,10 @@ def _run_download(job_id: str, cmd: list[str]):
         # DL完了後、JA字幕が空の動画を自動翻訳
         if status == 'done' and db_exists():
             try:
-                conn = get_db()
-                no_ja = conn.execute(
-                    "SELECT video_id FROM videos WHERE subtitle_en != '' AND (subtitle_ja IS NULL OR subtitle_ja='')"
-                ).fetchall()
-                conn.close()
+                with db_conn() as conn:
+                    no_ja = conn.execute(
+                        "SELECT video_id FROM videos WHERE subtitle_en != '' AND (subtitle_ja IS NULL OR subtitle_ja='')"
+                    ).fetchall()
                 for row in no_ja:
                     vid = row['video_id']
                     q.put(f'🌐 日本語訳を自動取得中: {vid}')
@@ -1096,6 +1088,11 @@ def _run_download(job_id: str, cmd: list[str]):
     finally:
         _jobs[job_id]['status'] = status
         q.put(None)  # sentinel
+        # 古い完了ジョブを削除（直近10件のみ保持）
+        with _jobs_lock:
+            done_ids = [jid for jid, j in _jobs.items() if j['status'] != 'running']
+            for old_id in done_ids[:-10]:
+                del _jobs[old_id]
 
 
 @app.route('/api/download', methods=['POST'])
@@ -1209,12 +1206,11 @@ def api_explain():
     clean_text = re.sub(r'\*+', '', text).strip()
     if db_exists():
         try:
-            conn = get_db()
-            row = conn.execute(
-                "SELECT explanation FROM phrases WHERE phrase_en = ? OR REPLACE(REPLACE(phrase_en,'**',''),'*','') = ? LIMIT 1",
-                (text, clean_text)
-            ).fetchone()
-            conn.close()
+            with db_conn() as conn:
+                row = conn.execute(
+                    "SELECT explanation FROM phrases WHERE phrase_en = ? OR REPLACE(REPLACE(phrase_en,'**',''),'*','') = ? LIMIT 1",
+                    (text, clean_text)
+                ).fetchone()
             if row and row['explanation']:
                 cached = json.loads(row['explanation'])
                 if cached and isinstance(cached, dict) and cached.get('meaning'):
@@ -1249,7 +1245,7 @@ def api_explain():
 }}"""
 
     try:
-        resp = req_lib.post(
+        resp = _http_session.post(
             'https://openrouter.ai/api/v1/chat/completions',
             headers={
                 'Authorization': f'Bearer {api_key}',
@@ -1291,12 +1287,11 @@ def api_srt_by_video(video_id, lang):
     if not db_exists():
         return jsonify([])
     try:
-        conn = get_db()
-        row = conn.execute(
-            "SELECT video_path, subtitle_en, subtitle_ja FROM videos WHERE video_id = ?",
-            (video_id,)
-        ).fetchone()
-        conn.close()
+        with db_conn() as conn:
+            row = conn.execute(
+                "SELECT video_path, subtitle_en, subtitle_ja FROM videos WHERE video_id = ?",
+                (video_id,)
+            ).fetchone()
         if not row:
             return jsonify([])
 
@@ -1351,9 +1346,8 @@ def api_fetch_ja_sub(video_id):
     if not db_exists():
         return jsonify({'error': 'DB not found'}), 500
     try:
-        conn = get_db()
-        row = conn.execute("SELECT url FROM videos WHERE video_id=?", (video_id,)).fetchone()
-        conn.close()
+        with db_conn() as conn:
+            row = conn.execute("SELECT url FROM videos WHERE video_id=?", (video_id,)).fetchone()
         if not row or not row['url']:
             return jsonify({'error': 'URL not found'}), 404
         url = row['url']
@@ -1438,10 +1432,9 @@ def api_fetch_ja_sub(video_id):
                 return jsonify({'error': 'SRT変換失敗'}), 500
 
             # DBに保存
-            conn = get_db()
-            conn.execute("UPDATE videos SET subtitle_ja=? WHERE video_id=?", (srt_text, video_id))
-            conn.commit()
-            conn.close()
+            with db_conn() as conn:
+                conn.execute("UPDATE videos SET subtitle_ja=? WHERE video_id=?", (srt_text, video_id))
+                conn.commit()
 
             return jsonify({'ok': True, 'count': len(parsed), 'subtitles': parsed})
     except Exception as e:
@@ -1455,9 +1448,8 @@ def api_fetch_en_sub(video_id):
     if not db_exists():
         return jsonify({'error': 'DB not found'}), 500
     try:
-        conn = get_db()
-        row = conn.execute("SELECT url FROM videos WHERE video_id=?", (video_id,)).fetchone()
-        conn.close()
+        with db_conn() as conn:
+            row = conn.execute("SELECT url FROM videos WHERE video_id=?", (video_id,)).fetchone()
         if not row or not row['url']:
             return jsonify({'error': 'URL not found'}), 404
         url = row['url']
@@ -1533,10 +1525,9 @@ def api_fetch_en_sub(video_id):
             if not parsed:
                 return jsonify({'error': 'SRT変換失敗'}), 500
 
-            conn = get_db()
-            conn.execute("UPDATE videos SET subtitle_en=? WHERE video_id=?", (srt_text, video_id))
-            conn.commit()
-            conn.close()
+            with db_conn() as conn:
+                conn.execute("UPDATE videos SET subtitle_en=? WHERE video_id=?", (srt_text, video_id))
+                conn.commit()
 
             return jsonify({'ok': True, 'count': len(parsed), 'subtitles': parsed})
     except Exception as e:
@@ -1555,12 +1546,11 @@ def serve_media(filepath):
     stem = Path(filepath).stem
     if db_exists():
         try:
-            conn = get_db()
-            row = conn.execute(
-                "SELECT video_path FROM videos WHERE video_path LIKE ? LIMIT 1",
-                (f'%{stem}%',)
-            ).fetchone()
-            conn.close()
+            with db_conn() as conn:
+                row = conn.execute(
+                    "SELECT video_path FROM videos WHERE video_path LIKE ? LIMIT 1",
+                    (f'%{stem}%',)
+                ).fetchone()
             if row and row['video_path']:
                 vp = row['video_path']
                 if os.path.exists(vp):
