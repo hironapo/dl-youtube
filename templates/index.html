@@ -1,0 +1,2837 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>YouTube 学習マネージャー</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  /* ─ カラーパレット（ビジネス系） ─ */
+  --navy:       #003366;   /* メイン：ダークネイビー */
+  --blue:       #0055AA;   /* セカンダリ：ロイヤルブルー */
+  --lightblue:  #E8F4FC;   /* 背景アクセント：ライトブルー */
+  --red:        #CC0000;   /* 強調①：重要・警告 */
+
+  --bg-base:    #ffffff;
+  --bg-surface: #f4f6f9;
+  --bg-card:    #ffffff;
+  --bg-hover:   #EBF3FB;
+  --bg-active:  var(--lightblue);
+  --border:     #c8d6e5;
+  --border-mid: #a0b8d0;
+
+  --accent:     var(--navy);
+  --accent-dim: var(--lightblue);
+  --accent2:    var(--blue);
+  --danger:     var(--red);
+  --warning:    #D4820A;
+  --success:    #1a7a4a;
+
+  --text:       #1a2a3a;
+  --text-dim:   #3a5070;
+  --text-muted: #7090aa;
+
+  --sidebar-w:  255px;
+  --header-h:   52px;
+  --radius:     6px;
+  --radius-sm:  4px;
+
+  /* ヘッダー専用 */
+  --header-bg:  var(--navy);
+  --header-fg:  #ffffff;
+}
+
+body {
+  font-family: 'Meiryo', 'Meiryo UI', 'Yu Gothic UI', 'Noto Sans JP', sans-serif;
+  background: var(--bg-base);
+  color: var(--text);
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  font-size: 14px;
+}
+
+/* ─── ヘッダー（ネイビー帯） ─── */
+#header {
+  height: var(--header-h);
+  background: var(--header-bg);
+  border-bottom: 3px solid var(--blue);
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+  gap: 14px;
+  flex-shrink: 0;
+  z-index: 20;
+}
+.logo {
+  display: flex; align-items: center; gap: 8px;
+  font-weight: 700; font-size: 1rem; color: #ffffff;
+  white-space: nowrap; letter-spacing: .04em;
+}
+#header-title {
+  flex: 1; font-size: .82rem; color: rgba(255,255,255,.75);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.btn-icon {
+  background: none; border: none; cursor: pointer;
+  color: rgba(255,255,255,.7); padding: 6px; border-radius: var(--radius-sm);
+  display: flex; align-items: center; transition: color .15s, background .15s;
+}
+.btn-icon:hover { color: #fff; background: rgba(255,255,255,.15); }
+
+/* ─── メインレイアウト ─── */
+#main { display: flex; flex: 1; overflow: hidden; }
+
+/* ─── サイドバー（白地＋ネイビーアクセント） ─── */
+#sidebar {
+  width: var(--sidebar-w);
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column;
+  flex-shrink: 0; overflow: hidden;
+  transition: width .22s cubic-bezier(.4,0,.2,1);
+}
+#sidebar.collapsed { width: 48px; }
+#sidebar.collapsed .nav-label,
+#sidebar.collapsed #date-tree { display: none; }
+
+#sidebar-nav {
+  display: flex; flex-direction: row;
+  padding: 10px 8px; gap: 6px;
+  border-bottom: 2px solid var(--border);
+  background: var(--bg-surface);
+}
+.nav-item {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  padding: 10px 6px; border-radius: var(--radius-sm);
+  cursor: pointer; color: var(--text-dim);
+  font-size: .78rem; font-weight: 700;
+  border: 2px solid transparent; background: var(--bg-hover);
+  flex: 1; text-align: center;
+  transition: color .15s, background .15s, border-color .15s; white-space: nowrap;
+  line-height: 1.3;
+}
+.nav-item svg { display: none; }
+.nav-item:hover { color: var(--navy); background: #dde8f5; border-color: var(--navy); }
+.nav-item.active {
+  color: #fff;
+  background: var(--navy);
+  border-color: var(--navy);
+}
+
+#date-tree { flex: 1; overflow-y: auto; padding: 8px; }
+#date-tree::-webkit-scrollbar { width: 4px; }
+#date-tree::-webkit-scrollbar-thumb { background: var(--border-mid); border-radius: 2px; }
+
+.date-group { margin-bottom: 2px; }
+.date-header {
+  display: flex; align-items: center; gap: 6px;
+  padding: 7px 8px; border-radius: var(--radius-sm);
+  cursor: pointer; color: var(--text-dim); font-size: .8rem; font-weight: 700;
+  transition: color .15s, background .15s; user-select: none;
+  letter-spacing: .02em;
+}
+.date-header:hover { color: var(--navy); background: var(--bg-hover); }
+.date-header.open { color: var(--navy); }
+.date-count {
+  margin-left: auto; background: var(--lightblue);
+  color: var(--blue); font-size: .68rem; padding: 1px 7px;
+  border-radius: 20px; font-weight: 700;
+}
+.date-arrow { transition: transform .2s; flex-shrink: 0; }
+.date-header.open .date-arrow { transform: rotate(90deg); }
+.video-list { display: none; padding-left: 8px; }
+.date-header.open + .video-list { display: block; }
+
+.video-item {
+  display: flex; align-items: center; gap: 7px;
+  padding: 5px 8px; border-radius: var(--radius-sm);
+  cursor: pointer; color: var(--text-muted); font-size: .78rem;
+  transition: color .15s, background .15s;
+}
+.video-item:hover { color: var(--navy); background: var(--bg-hover); }
+.video-item.active {
+  color: var(--blue); background: var(--lightblue);
+  font-weight: 600;
+}
+.video-item-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+
+/* ─── コンテンツ ─── */
+#content { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: var(--bg-base); }
+.panel { display: none; flex: 1; overflow: hidden; }
+.panel.active { display: flex; }
+
+/* ─── ウェルカム ─── */
+#panel-welcome { flex-direction: column; justify-content: center; align-items: center; gap: 14px; }
+.welcome-icon { color: var(--navy); opacity: .15; }
+.welcome-text { color: var(--text-muted); font-size: .9rem; }
+
+/* ─── プレイヤーパネル ─── */
+#panel-player { flex-direction: row; }
+
+#player-left { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
+
+#video-info {
+  padding: 10px 18px 8px;
+  border-bottom: 2px solid var(--navy);
+  background: var(--bg-surface); flex-shrink: 0;
+}
+#video-title-text { font-size: .95rem; font-weight: 700; color: var(--navy); }
+#video-channel { font-size: .75rem; color: var(--text-muted); margin-top: 2px; }
+
+#video-wrap { background: #000; flex-shrink: 0; }
+#video-wrap video { width: 100%; max-height: 46vh; display: block; outline: none; }
+
+/* 字幕現在行 */
+#subtitle-current {
+  min-height: 56px; background: var(--lightblue);
+  border-bottom: 1px solid var(--border);
+  border-left: 4px solid var(--blue);
+  padding: 10px 16px; flex-shrink: 0;
+  display: flex; align-items: center; gap: 12px;
+}
+#subtitle-current-inner { flex: 1; }
+#subtitle-en { font-size: .97rem; line-height: 1.45; color: var(--navy); font-weight: 700; }
+#subtitle-ja { font-size: .82rem; color: var(--blue); margin-top: 3px; }
+#btn-explain-current {
+  background: var(--navy); border: none;
+  color: #fff; padding: 6px 12px; border-radius: var(--radius-sm);
+  font-size: .75rem; cursor: pointer; white-space: nowrap; font-weight: 600;
+  transition: background .15s;
+}
+#btn-explain-current:hover { background: var(--blue); }
+#btn-explain-current:disabled { opacity: .35; cursor: default; }
+
+/* 字幕スクロールリスト */
+#subtitle-scroll { flex: 1; overflow-y: auto; padding: 4px 8px; background: var(--bg-base); }
+#subtitle-scroll::-webkit-scrollbar { width: 4px; }
+#subtitle-scroll::-webkit-scrollbar-thumb { background: var(--border-mid); border-radius: 2px; }
+
+.sub-line {
+  display: grid;
+  grid-template-columns: 40px 1fr 1fr 28px 22px;
+  align-items: start; gap: 6px;
+  padding: 5px 8px; border-radius: var(--radius-sm);
+  cursor: pointer; border-left: 3px solid transparent;
+  transition: background .1s;
+}
+.sub-line:hover { background: var(--bg-hover); }
+.sub-line.current { background: var(--lightblue); border-left-color: var(--navy); }
+.sub-time { font-size: .7rem; color: var(--text-muted); flex-shrink: 0; margin-top: 2px; font-family: monospace; }
+.sub-body { min-width: 0; }
+.sub-text { font-size: .83rem; color: var(--text-dim); line-height: 1.45; }
+.sub-line.current .sub-text { color: var(--navy); font-weight: 600; }
+.sub-ja {
+  font-size: .76rem; color: #5577aa; line-height: 1.45;
+  border-left: 2px solid var(--border); padding-left: 6px;
+  min-width: 0;
+}
+.sub-line.current .sub-ja { color: var(--blue); border-left-color: var(--blue); }
+.sub-difficulty {
+  font-size: .68rem; flex-shrink: 0; margin-top: 2px;
+  display: flex; flex-direction: column; align-items: center; gap: 1px;
+}
+.diff-badge {
+  padding: 1px 5px; border-radius: 8px; font-weight: 700; white-space: nowrap;
+}
+.diff-1 { background: #e8f4fc; color: var(--blue); }
+.diff-2 { background: #fff3cd; color: #856404; }
+.diff-3 { background: #fde8e8; color: var(--red); }
+.sub-add-btn {
+  opacity: 0; flex-shrink: 0; background: none; border: 1px solid var(--border);
+  color: var(--blue); width: 20px; height: 20px; border-radius: 50%;
+  font-size: .75rem; cursor: pointer; line-height: 1; padding: 0;
+  transition: all .15s; display: flex; align-items: center; justify-content: center;
+}
+.sub-line:hover .sub-add-btn { opacity: 1; }
+.sub-add-btn:hover { background: var(--navy); color: #fff; border-color: var(--navy); }
+
+/* 右パネル */
+#player-right {
+  width: 330px; flex-shrink: 0;
+  border-left: 2px solid var(--navy);
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--bg-base);
+}
+
+.tab-bar {
+  display: flex; border-bottom: 2px solid var(--navy); flex-shrink: 0;
+  background: var(--bg-surface);
+}
+.tab-btn {
+  flex: 1; padding: 9px 4px; text-align: center;
+  font-size: .76rem; font-weight: 700; color: var(--text-muted);
+  cursor: pointer; border: none; background: none;
+  border-bottom: 3px solid transparent; margin-bottom: -2px;
+  transition: color .15s, border-color .15s;
+}
+.tab-btn.active { color: var(--navy); border-bottom-color: var(--navy); background: #fff; }
+.tab-btn:hover:not(.active) { color: var(--navy); background: var(--bg-hover); }
+
+.tab-content { display: none; flex: 1; overflow: hidden; flex-direction: column; }
+.tab-content.active { display: flex; }
+
+/* フレーズタブ */
+#tab-phrases-content { overflow-y: auto; padding: 8px; }
+#tab-phrases-content::-webkit-scrollbar { width: 4px; }
+#tab-phrases-content::-webkit-scrollbar-thumb { background: var(--border-mid); border-radius: 2px; }
+
+.phrase-card {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 10px 12px; margin-bottom: 6px;
+  transition: border-color .15s; border-left: 3px solid transparent;
+}
+.phrase-card:hover { border-color: var(--blue); background: var(--bg-hover); }
+.phrase-card.top { border-left-color: var(--red); }
+.phrase-en { font-size: .87rem; font-weight: 700; color: var(--navy); }
+.phrase-ja { font-size: .77rem; color: var(--blue); margin-top: 3px; }
+.phrase-note { font-size: .72rem; color: var(--text-muted); margin-top: 4px; line-height: 1.4; }
+.phrase-actions { display: flex; gap: 5px; margin-top: 8px; justify-content: flex-end; }
+.phrase-btn {
+  background: none; border: 1px solid var(--border);
+  color: var(--text-muted); padding: 3px 8px;
+  border-radius: var(--radius-sm); font-size: .7rem; cursor: pointer; transition: all .15s;
+}
+.phrase-btn:hover { border-color: var(--navy); color: var(--navy); background: var(--lightblue); }
+.phrase-btn.active { background: var(--red); border-color: var(--red); color: #fff; }
+.phrase-btn.danger:hover { border-color: var(--red); color: var(--red); }
+.phrase-btn.explain-btn:hover { border-color: var(--blue); color: var(--blue); background: var(--lightblue); }
+
+.phrase-time {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: .68rem; color: var(--blue); font-family: monospace;
+  background: var(--lightblue); border: 1px solid var(--border);
+  padding: 2px 7px; border-radius: 20px; font-weight: 700;
+  cursor: pointer; transition: all .15s; white-space: nowrap;
+}
+.phrase-time:hover { background: var(--navy); color: #fff; border-color: var(--navy); }
+
+/* 詳細タブ */
+#tab-detail-content { overflow-y: auto; padding: 12px; flex: 1; }
+#tab-detail-content::-webkit-scrollbar { width: 4px; }
+#tab-detail-content::-webkit-scrollbar-thumb { background: var(--border-mid); border-radius: 2px; }
+
+.detail-empty {
+  color: var(--text-muted); font-size: .82rem; text-align: center;
+  margin-top: 32px; line-height: 1.7;
+}
+.detail-query {
+  background: var(--lightblue); border-left: 4px solid var(--navy);
+  padding: 10px 12px; margin-bottom: 12px;
+  font-size: .88rem; color: var(--navy); font-weight: 700; line-height: 1.4;
+}
+.detail-section { margin-bottom: 12px; }
+.detail-label {
+  font-size: .67rem; font-weight: 700; color: var(--navy);
+  text-transform: uppercase; letter-spacing: .06em; margin-bottom: 4px;
+  border-bottom: 1px solid var(--border); padding-bottom: 3px;
+}
+.detail-value {
+  font-size: .82rem; color: var(--text-dim); line-height: 1.55;
+  background: var(--bg-surface); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 8px 10px;
+}
+.detail-tags { display: flex; flex-wrap: wrap; gap: 5px; }
+.detail-tag {
+  background: var(--lightblue); color: var(--blue); border: 1px solid var(--blue);
+  font-size: .7rem; padding: 2px 8px; border-radius: 20px; font-weight: 600;
+}
+.detail-level {
+  display: inline-block;
+  padding: 2px 10px; border-radius: 3px; font-size: .72rem; font-weight: 700;
+}
+.level-初級 { background: #e6f4ea; color: #1a7a4a; border: 1px solid #1a7a4a; }
+.level-中級 { background: #fff3e0; color: #D4820A; border: 1px solid #D4820A; }
+.level-上級 { background: #fdecea; color: var(--red); border: 1px solid var(--red); }
+
+.detail-loading {
+  display: flex; align-items: center; gap: 8px;
+  color: var(--text-muted); font-size: .82rem; padding: 16px 0;
+}
+.spinner {
+  width: 14px; height: 14px;
+  border: 2px solid var(--border); border-top-color: var(--navy);
+  border-radius: 50%; animation: spin .7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ─── ボキャブラリーパネル ─── */
+#panel-vocab { flex-direction: column; }
+#vocab-toolbar {
+  padding: 12px 20px; border-bottom: 2px solid var(--navy);
+  display: flex; gap: 10px; align-items: center; flex-shrink: 0;
+  background: var(--bg-surface);
+}
+#vocab-toolbar h2 { font-size: .9rem; font-weight: 700; color: var(--navy); flex-shrink: 0; }
+#vocab-search {
+  flex: 1; background: #fff; border: 1px solid var(--border-mid);
+  border-radius: var(--radius-sm); color: var(--text);
+  padding: 7px 12px; font-size: .83rem; outline: none;
+  transition: border-color .15s;
+}
+#vocab-search:focus { border-color: var(--navy); box-shadow: 0 0 0 2px var(--lightblue); }
+#vocab-search::placeholder { color: var(--text-muted); }
+#vocab-stats { font-size: .75rem; color: var(--text-muted); flex-shrink: 0; }
+
+#vocab-grid {
+  flex: 1; overflow-y: auto; padding: 14px 20px;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px; align-content: start;
+}
+#vocab-grid::-webkit-scrollbar { width: 4px; }
+#vocab-grid::-webkit-scrollbar-thumb { background: var(--border-mid); border-radius: 2px; }
+
+.vocab-card {
+  background: #fff; border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 12px 14px;
+  transition: border-color .15s, box-shadow .15s; cursor: pointer;
+  border-top: 3px solid transparent;
+}
+.vocab-card:hover { border-color: var(--blue); box-shadow: 0 2px 8px rgba(0,85,170,.1); border-top-color: var(--blue); }
+.vocab-card.top { border-top-color: var(--red); }
+.vocab-source { font-size: .7rem; color: var(--text-muted); margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.top-badge {
+  display: inline-block; background: var(--red); color: #fff;
+  font-size: .62rem; padding: 1px 6px; border-radius: 3px;
+  margin-left: 5px; vertical-align: middle; font-weight: 700;
+}
+
+/* ─── タグフィルターバー ─── */
+#tag-filter-bar { display:flex; gap:6px; padding:8px 20px 0; flex-wrap:wrap; flex-shrink:0; background:var(--bg-surface); border-bottom:1px solid var(--border); }
+.tag-chip { padding:3px 10px; border-radius:20px; font-size:.72rem; font-weight:600; cursor:pointer; border:1px solid var(--border); color:var(--text-dim); background:#fff; transition:all .15s; }
+.tag-chip.active { background:var(--navy); color:#fff; border-color:var(--navy); }
+.tag-chip:hover:not(.active) { border-color:var(--navy); color:var(--navy); }
+
+/* ─── グループビュー ─── */
+.vocab-group-header { font-size:.78rem; font-weight:700; color:var(--navy); padding:10px 0 4px; border-bottom:2px solid var(--navy); margin-bottom:8px; grid-column:1/-1; }
+.vocab-group-section { grid-column:1/-1; display:contents; }
+
+/* ─── コメントカード ─── */
+.comment-card {
+  background:#fff; border:1px solid var(--border); border-radius:var(--radius-sm);
+  padding:10px 12px; margin-bottom:6px; border-left:3px solid var(--lightblue);
+  position:relative;
+}
+.comment-author { font-size:.68rem; color:var(--text-muted); margin-bottom:4px; }
+.comment-text { font-size:.82rem; color:var(--text-dim); line-height:1.5; }
+.comment-likes { font-size:.68rem; color:var(--text-muted); margin-top:4px; }
+
+/* ─── 学習モード ─── */
+#study-panel {
+  display: flex; flex-direction: column; height: 100%;
+  overflow-y: auto; padding: 10px; gap: 8px;
+}
+#study-panel::-webkit-scrollbar { width: 4px; }
+#study-panel::-webkit-scrollbar-thumb { background: var(--border-mid); border-radius: 2px; }
+
+#study-screenshot-wrap {
+  background: #111; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); overflow: hidden; flex-shrink: 0; min-height: 70px;
+  display: flex; align-items: center; justify-content: center;
+}
+#study-canvas { width: 100%; height: auto; display: none; }
+#study-no-screenshot { color: #888; font-size: .75rem; padding: 12px; }
+
+#study-sentence-wrap {
+  background: var(--lightblue); border-left: 4px solid var(--navy);
+  padding: 12px; flex-shrink: 0;
+}
+#study-progress {
+  font-size: .68rem; color: var(--text-muted); margin-bottom: 5px;
+  text-align: right; font-weight: 600;
+}
+#study-en { font-size: .97rem; font-weight: 700; color: var(--navy); line-height: 1.5; }
+#study-ja { font-size: .82rem; color: var(--blue); margin-top: 5px; line-height: 1.4; }
+
+#study-nav { display: flex; gap: 6px; flex-shrink: 0; }
+.study-nav-btn {
+  background: #fff; border: 1px solid var(--border-mid);
+  color: var(--text-dim); padding: 8px 12px; border-radius: var(--radius-sm);
+  font-size: .8rem; cursor: pointer; transition: all .15s; font-weight: 600;
+}
+.study-nav-btn:hover { border-color: var(--navy); color: var(--navy); background: var(--lightblue); }
+.study-explain-btn {
+  flex: 1; background: var(--navy); border: none;
+  color: #fff; padding: 8px; border-radius: var(--radius-sm);
+  font-size: .8rem; cursor: pointer; font-weight: 700; transition: background .15s;
+}
+.study-explain-btn:hover { background: var(--blue); }
+.study-explain-btn:disabled { opacity: .35; cursor: default; }
+
+#study-detail-area { flex: 1; min-height: 0; }
+#study-detail-area .detail-section { margin-bottom: 10px; }
+
+/* ─── モーダル ─── */
+#modal-overlay {
+  display: none; position: fixed; inset: 0;
+  background: rgba(0,20,50,.5); z-index: 100;
+  align-items: center; justify-content: center;
+}
+#modal-overlay.open { display: flex; }
+#modal {
+  background: #fff; border: 1px solid var(--border);
+  border-top: 4px solid var(--navy);
+  border-radius: var(--radius); padding: 24px;
+  width: min(480px, 90vw); max-height: 80vh;
+  overflow-y: auto; position: relative;
+  box-shadow: 0 8px 32px rgba(0,20,50,.2);
+}
+#modal::-webkit-scrollbar { width: 4px; }
+#modal::-webkit-scrollbar-thumb { background: var(--border-mid); border-radius: 2px; }
+.modal-close {
+  position: absolute; top: 14px; right: 14px;
+  background: none; border: none; cursor: pointer;
+  color: var(--text-muted); padding: 4px; border-radius: 4px;
+}
+.modal-close:hover { color: var(--red); background: #fdecea; }
+
+.loading {
+  display: flex; align-items: center; justify-content: center;
+  padding: 32px; color: var(--text-muted); font-size: .83rem; gap: 8px;
+}
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-mid); border-radius: 3px; }
+
+/* ─── ヘッダー検索 ─── */
+#header-search-wrap {
+  position: relative; flex: 1; max-width: 300px;
+  transition: max-width .2s;
+}
+#header-search {
+  width: 100%; background: rgba(255,255,255,.12);
+  border: 1px solid rgba(255,255,255,.22); border-radius: 20px;
+  color: #fff; padding: 6px 12px 6px 30px;
+  font-size: .81rem; outline: none; font-family: inherit;
+  transition: background .15s, border-color .15s;
+}
+#header-search::placeholder { color: rgba(255,255,255,.42); }
+#header-search:focus { background: rgba(255,255,255,.2); border-color: rgba(255,255,255,.5); }
+#btn-open-dl {
+  background: #e8f000; border: none; color: #1a1a1a;
+  padding: 8px 18px; border-radius: var(--radius-sm);
+  font-size: .85rem; font-weight: 800; cursor: pointer;
+  display: flex; align-items: center; gap: 6px;
+  white-space: nowrap; font-family: inherit; transition: background .15s;
+  box-shadow: 0 2px 6px rgba(0,0,0,.25);
+  letter-spacing: .02em;
+}
+#btn-open-dl:hover { background: #d4db00; }
+
+/* ─── クイックフィルター ─── */
+#sidebar-quick {
+  display: flex; gap: 4px; padding: 8px 8px 7px;
+  border-bottom: 1px solid var(--border);
+  background: #fff; flex-shrink: 0;
+}
+.quick-btn {
+  flex: 1; background: none; border: 1px solid var(--border);
+  border-radius: 20px; padding: 4px 4px;
+  font-size: .72rem; font-weight: 600; cursor: pointer;
+  color: var(--text-dim); font-family: inherit;
+  transition: all .15s; white-space: nowrap;
+}
+.quick-btn:hover { border-color: var(--navy); color: var(--navy); }
+.quick-btn.active { background: var(--navy); border-color: var(--navy); color: #fff; }
+
+/* ─── ナビバッジ ─── */
+.nav-badge {
+  background: var(--lightblue);
+  color: var(--blue); font-size: .68rem;
+  padding: 1px 7px; border-radius: 20px; font-weight: 800;
+  min-width: 20px; text-align: center; margin-top: 2px;
+}
+.nav-item.active .nav-badge { background: rgba(255,255,255,.3); color: #fff; }
+
+/* ─── サイドバーフッター ─── */
+#sidebar-footer {
+  padding: 7px 12px; border-top: 1px solid var(--border);
+  background: var(--bg-surface); flex-shrink: 0;
+}
+#footer-stats { font-size: .68rem; color: var(--text-muted); }
+#sidebar.collapsed #sidebar-footer,
+#sidebar.collapsed #sidebar-quick { display: none; }
+
+/* ─── ウェルカムダッシュボード ─── */
+#panel-welcome { justify-content: flex-start; align-items: stretch; overflow-y: auto; }
+#welcome-inner {
+  padding: 32px 36px; max-width: 680px; margin: 0 auto; width: 100%;
+}
+#welcome-stats {
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  gap: 14px; margin-bottom: 28px;
+}
+.stat-card {
+  background: #fff; border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 20px 16px;
+  text-align: center; border-top: 3px solid var(--navy);
+  transition: box-shadow .15s;
+}
+.stat-card:hover { box-shadow: 0 2px 10px rgba(0,51,102,.1); }
+.stat-num {
+  font-size: 2rem; font-weight: 700; color: var(--navy);
+  line-height: 1.1; margin-bottom: 4px;
+}
+.stat-label {
+  font-size: .7rem; color: var(--text-muted);
+  font-weight: 600; text-transform: uppercase; letter-spacing: .04em;
+}
+.welcome-section-title {
+  font-size: .82rem; font-weight: 700; color: var(--navy);
+  margin-bottom: 10px; padding-bottom: 6px;
+  border-bottom: 2px solid var(--navy);
+}
+#welcome-recent { margin-bottom: 24px; }
+#recent-list { display: flex; flex-direction: column; gap: 6px; }
+.recent-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px; background: #fff;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  cursor: pointer; transition: border-color .15s, background .15s;
+}
+.recent-item:hover { border-color: var(--blue); background: var(--bg-hover); }
+.recent-item-title {
+  font-size: .85rem; font-weight: 600; color: var(--navy);
+  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.recent-item-date { font-size: .72rem; color: var(--text-muted); flex-shrink: 0; }
+</style>
+</head>
+<body>
+
+<!-- ヘッダー -->
+<div id="header">
+  <button class="btn-icon" id="btn-toggle-sidebar" title="メニュー (M)">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+    </svg>
+  </button>
+  <div class="logo">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <polygon points="5 3 19 12 5 21 5 3"/>
+    </svg>
+    YouTube学習
+  </div>
+  <div id="header-search-wrap">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:rgba(255,255,255,.5);pointer-events:none">
+      <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+    </svg>
+    <input id="header-search" type="text" placeholder="動画・フレーズを検索… (Ctrl+K)"
+      oninput="onHeaderSearch()" onfocus="onSearchFocus()" onblur="onSearchBlur()">
+  </div>
+  <span id="header-title"></span>
+  <button id="btn-open-dl" onclick="openDlModal()" title="URLからダウンロード (D)">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+      <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+    </svg>
+    📥 DL・登録
+  </button>
+</div>
+
+<!-- メイン -->
+<div id="main">
+
+  <!-- サイドバー -->
+  <nav id="sidebar">
+
+    <!-- クイックアクション -->
+    <div id="sidebar-quick">
+      <button class="quick-btn active" id="qbtn-all"   onclick="setFilter('all')"  >すべて</button>
+      <button class="quick-btn"        id="qbtn-today" onclick="setFilter('today')">今日</button>
+      <button class="quick-btn"        id="qbtn-week"  onclick="setFilter('week')" >今週</button>
+    </div>
+
+    <!-- ナビ -->
+    <div id="sidebar-nav">
+      <button class="nav-item active" data-panel="dates" onclick="showNav('dates')">
+        <span style="font-size:1.3rem">📹</span>
+        <span>動画<br>ライブラリ</span>
+        <span class="nav-badge" id="badge-videos"></span>
+      </button>
+      <button class="nav-item" data-panel="vocab" onclick="showNav('vocab')">
+        <span style="font-size:1.3rem">📚</span>
+        <span>ボキャブ<br>ラリー</span>
+        <span class="nav-badge" id="badge-phrases"></span>
+      </button>
+    </div>
+
+    <!-- 日付ツリー -->
+    <div id="date-tree">
+      <div class="loading"><div class="spinner"></div>読み込み中…</div>
+    </div>
+
+    <!-- 下部ステータス -->
+    <div id="sidebar-footer">
+      <span id="footer-stats">—</span>
+    </div>
+  </nav>
+
+  <!-- コンテンツ -->
+  <div id="content">
+
+    <!-- ウェルカム（ダッシュボード） -->
+    <div class="panel active" id="panel-welcome">
+      <div id="welcome-inner">
+        <div id="welcome-stats">
+          <div class="stat-card">
+            <div class="stat-num" id="stat-videos">—</div>
+            <div class="stat-label">動画</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-num" id="stat-phrases">—</div>
+            <div class="stat-label">フレーズ</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-num" id="stat-top">—</div>
+            <div class="stat-label">重要フレーズ</div>
+          </div>
+        </div>
+        <div id="welcome-recent">
+          <div class="welcome-section-title">🕐 最近の動画</div>
+          <div id="recent-list"><div class="loading"><div class="spinner"></div></div></div>
+        </div>
+        <button onclick="openDlModal()" style="
+            margin-top:20px; background:var(--navy); border:none; color:#fff;
+            padding:12px 28px; border-radius:4px; font-size:.88rem; font-weight:700;
+            cursor:pointer; font-family:inherit; transition:background .15s;
+            display:inline-flex; align-items:center; gap:8px;">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+          新しい動画をダウンロード
+        </button>
+      </div>
+    </div>
+
+    <!-- 動画プレイヤー -->
+    <div class="panel" id="panel-player">
+      <!-- 左：動画 + 字幕 -->
+      <div id="player-left">
+        <div id="video-info">
+          <div id="video-title-text">—</div>
+          <div id="video-channel"></div>
+          <div id="video-actions" style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap"></div>
+        </div>
+        <div id="video-wrap">
+          <video id="video-player" controls preload="metadata"></video>
+        </div>
+        <!-- 現在字幕 -->
+        <div id="subtitle-current">
+          <div id="subtitle-current-inner">
+            <div id="subtitle-en">—</div>
+            <div id="subtitle-ja"></div>
+          </div>
+          <button id="btn-explain-current" onclick="explainCurrent()" disabled>🔍 解説</button>
+        </div>
+        <!-- 字幕リスト -->
+        <div style="display:grid;grid-template-columns:40px 1fr 1fr auto;gap:6px;padding:4px 8px;border-top:1px solid var(--border);border-bottom:1px solid var(--border);background:var(--bg-base)">
+          <span></span>
+          <span style="font-size:.68rem;color:var(--text-muted);font-weight:700">English</span>
+          <span style="font-size:.68rem;color:var(--text-muted);font-weight:700;border-left:2px solid var(--border);padding-left:6px">日本語</span>
+          <span></span>
+        </div>
+        <div id="subtitle-scroll"></div>
+      </div>
+
+      <!-- 右：タブパネル -->
+      <div id="player-right">
+        <div class="tab-bar">
+          <button class="tab-btn active" onclick="switchTab('phrases')">フレーズ</button>
+          <button class="tab-btn" onclick="switchTab('detail')">🔍 解説</button>
+          <button class="tab-btn" onclick="switchTab('study')">📷 学習</button>
+          <button class="tab-btn" onclick="switchTab('comments')">💬 コメント</button>
+        </div>
+
+        <!-- フレーズタブ -->
+        <div class="tab-content active" id="tab-phrases">
+          <div id="tab-phrases-content">
+            <div class="loading">フレーズなし</div>
+          </div>
+        </div>
+
+        <!-- 詳細タブ -->
+        <div class="tab-content" id="tab-detail">
+          <div id="tab-detail-content">
+            <p class="detail-empty">字幕の「🔍 解説」ボタンか<br>フレーズの「解説」ボタンをクリックしてください</p>
+          </div>
+        </div>
+
+        <!-- 学習モードタブ -->
+        <div class="tab-content" id="tab-study">
+          <div id="study-panel">
+            <div id="study-screenshot-wrap">
+              <canvas id="study-canvas"></canvas>
+              <div id="study-no-screenshot">動画から自動キャプチャ</div>
+            </div>
+            <div id="study-sentence-wrap">
+              <div id="study-progress"></div>
+              <div id="study-en"></div>
+              <div id="study-ja"></div>
+            </div>
+            <div id="study-nav">
+              <button class="study-nav-btn" onclick="studyPrev()">◀ 前</button>
+              <button id="btn-study-explain" class="study-explain-btn" onclick="studyExplain()">🔍 英検1級解説</button>
+              <button class="study-nav-btn" onclick="studyNext()">次 ▶</button>
+            </div>
+            <div id="study-detail-area"></div>
+          </div>
+        </div>
+
+        <!-- コメントタブ -->
+        <div class="tab-content" id="tab-comments">
+          <div id="tab-comments-content" style="overflow-y:auto;flex:1;padding:8px">
+            <div class="loading">動画を選択してください</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ボキャブラリー -->
+    <div class="panel" id="panel-vocab">
+      <div id="vocab-toolbar">
+        <h2>📚 ボキャブラリー</h2>
+        <input id="vocab-search" type="text" placeholder="フレーズを検索…" oninput="onVocabSearch()">
+        <span id="vocab-stats"></span>
+        <button onclick="openAddPhraseModal(null,'')" style="
+            background:var(--navy);border:none;color:#fff;
+            padding:6px 12px;border-radius:4px;font-size:.76rem;font-weight:700;
+            cursor:pointer;font-family:inherit;white-space:nowrap;flex-shrink:0">
+          ＋ 追加
+        </button>
+        <button onclick="prefetchAllExplanations()" style="
+            background:var(--blue);border:none;color:#fff;
+            padding:6px 12px;border-radius:4px;font-size:.76rem;font-weight:700;
+            cursor:pointer;font-family:inherit;white-space:nowrap;flex-shrink:0">
+          🔄 解説一括取得
+        </button>
+        <button onclick="fetchAllComments()" style="
+            background:#5a6f8a;border:none;color:#fff;
+            padding:6px 12px;border-radius:4px;font-size:.76rem;font-weight:700;
+            cursor:pointer;font-family:inherit;white-space:nowrap;flex-shrink:0">
+          💬 コメント取得
+        </button>
+        <button onclick="toggleVocabGroupView()" id="btn-group-view" style="
+            background:#fff;border:1px solid var(--border);color:var(--text-dim);
+            padding:6px 12px;border-radius:4px;font-size:.76rem;font-weight:700;
+            cursor:pointer;font-family:inherit;white-space:nowrap;flex-shrink:0">
+          タグ別
+        </button>
+        <button onclick="showNetworkView()" style="
+            background:#fff;border:1px solid var(--border);color:var(--text-dim);
+            padding:6px 12px;border-radius:4px;font-size:.76rem;font-weight:700;
+            cursor:pointer;font-family:inherit;white-space:nowrap;flex-shrink:0">
+          🕸️ 関連
+        </button>
+      </div>
+      <div style="display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap;align-items:center">
+        <span style="font-size:.72rem;color:var(--text-muted);font-weight:700">表示：</span>
+        <button id="btn-vocab-all" onclick="setVocabFilter('all')" style="
+            border:1px solid var(--blue);background:var(--blue);color:#fff;
+            padding:3px 10px;border-radius:12px;font-size:.72rem;cursor:pointer;font-family:inherit">
+          すべて
+        </button>
+        <button id="btn-vocab-top" onclick="setVocabFilter('top')" style="
+            border:1px solid var(--border);background:#fff;color:var(--text-dim);
+            padding:3px 10px;border-radius:12px;font-size:.72rem;cursor:pointer;font-family:inherit">
+          ★ お気に入り
+        </button>
+        <button id="btn-vocab-current" onclick="setVocabFilter('current')" style="
+            border:1px solid var(--border);background:#fff;color:var(--text-dim);
+            padding:3px 10px;border-radius:12px;font-size:.72rem;cursor:pointer;font-family:inherit">
+          📹 この動画
+        </button>
+      </div>
+      <div id="tag-filter-bar">
+        <span class="tag-chip active" onclick="setTagFilter('')">すべて</span>
+      </div>
+      <div id="vocab-grid">
+        <div class="loading"><div class="spinner"></div>読み込み中…</div>
+      </div>
+      <!-- ネットワークビュー -->
+      <div id="network-view" style="display:none;flex:1;flex-direction:column;overflow:hidden">
+        <div style="padding:8px;display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--border)">
+          <button onclick="buildNetwork()" style="
+              background:var(--navy);border:none;color:#fff;
+              padding:5px 12px;border-radius:4px;font-size:.76rem;font-weight:700;cursor:pointer;font-family:inherit">
+            🔄 関連を再構築
+          </button>
+          <span id="network-stats" style="font-size:.75rem;color:var(--text-muted)"></span>
+          <button onclick="hideNetworkView()" style="
+              margin-left:auto;background:#fff;border:1px solid var(--border);color:var(--text-dim);
+              padding:5px 10px;border-radius:4px;font-size:.76rem;cursor:pointer;font-family:inherit">
+            ✕ 閉じる
+          </button>
+        </div>
+        <canvas id="network-canvas" style="flex:1;width:100%;cursor:grab"></canvas>
+      </div>
+    </div>
+
+  </div><!-- /content -->
+</div><!-- /main -->
+
+<!-- ダウンロードモーダル -->
+<div id="dl-overlay" onclick="closeDlModal(event)" style="
+    display:none; position:fixed; inset:0;
+    background:rgba(0,20,50,.55); z-index:200;
+    align-items:center; justify-content:center;">
+  <div id="dl-modal" style="
+      background:#fff; border-top:4px solid #003366;
+      border-radius:6px; padding:24px; width:min(560px,94vw);
+      max-height:88vh; overflow-y:auto; position:relative;
+      box-shadow:0 8px 40px rgba(0,20,50,.25);">
+
+    <button onclick="closeDlModal()" style="
+        position:absolute; top:14px; right:14px;
+        background:none; border:none; cursor:pointer;
+        color:#7090aa; font-size:1.2rem; line-height:1;">✕</button>
+
+    <h2 style="font-size:.95rem; font-weight:700; color:#003366; margin-bottom:16px;">
+      📥 URLからダウンロード・DB登録
+    </h2>
+
+    <!-- URL入力 -->
+    <div style="margin-bottom:14px;">
+      <label style="font-size:.78rem; font-weight:700; color:#003366; display:block; margin-bottom:5px;">
+        YouTube URL（複数行可）
+      </label>
+      <textarea id="dl-urls" rows="3" placeholder="https://www.youtube.com/watch?v=..." style="
+          width:100%; border:1px solid #a0b8d0; border-radius:4px;
+          padding:8px 10px; font-size:.84rem; resize:vertical; outline:none;
+          font-family:monospace; color:#1a2a3a;
+          transition:border-color .15s;"></textarea>
+    </div>
+
+    <!-- オプション行 -->
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:14px;">
+      <div>
+        <label style="font-size:.75rem; font-weight:700; color:#003366; display:block; margin-bottom:4px;">モード</label>
+        <select id="dl-mode" style="
+            width:100%; border:1px solid #a0b8d0; border-radius:4px;
+            padding:7px 10px; font-size:.83rem; color:#1a2a3a; outline:none; background:#fff;">
+          <option value="both">動画＋字幕＋LLM解析</option>
+          <option value="sub">字幕＋LLM解析のみ</option>
+          <option value="video">動画のみ</option>
+        </select>
+      </div>
+      <div>
+        <label style="font-size:.75rem; font-weight:700; color:#003366; display:block; margin-bottom:4px;">LLMモデル</label>
+        <select id="dl-model" onchange="state.selectedModel=this.value" style="
+            width:100%; border:1px solid #a0b8d0; border-radius:4px;
+            padding:7px 10px; font-size:.83rem; color:#1a2a3a; outline:none; background:#fff;">
+          <option value="anthropic/claude-3-haiku" selected>Claude 3 Haiku（推奨・日本語高品質）</option>
+          <option value="anthropic/claude-sonnet-4-6">Claude Sonnet 4.6（最高精度）</option>
+          <option value="deepseek/deepseek-chat">DeepSeek V3（低コスト）</option>
+          <option value="google/gemini-2.0-flash-exp:free">Gemini 2.0 Flash（無料）</option>
+          <option value="meta-llama/llama-3.3-70b-instruct:free">Llama 3.3 70B（無料）</option>
+          <option value="openai/gpt-4o-mini">GPT-4o Mini</option>
+        </select>
+      </div>
+      <div>
+        <label style="font-size:.75rem; font-weight:700; color:#003366; display:block; margin-bottom:4px;">字幕言語</label>
+        <select id="dl-lang" style="
+            width:100%; border:1px solid #a0b8d0; border-radius:4px;
+            padding:7px 10px; font-size:.83rem; color:#1a2a3a; outline:none; background:#fff;">
+          <option value="en" selected>英語のみ（推奨）</option>
+          <option value="en,ja">英語＋日本語</option>
+          <option value="ja">日本語のみ</option>
+        </select>
+      </div>
+      <div>
+        <label style="font-size:.75rem; font-weight:700; color:#003366; display:block; margin-bottom:4px;">TOPフレーズ数</label>
+        <select id="dl-top" style="
+            width:100%; border:1px solid #a0b8d0; border-radius:4px;
+            padding:7px 10px; font-size:.83rem; color:#1a2a3a; outline:none; background:#fff;">
+          <option value="3">3個</option>
+          <option value="5">5個</option>
+          <option value="10">10個</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- 実行ボタン -->
+    <button id="dl-btn-start" onclick="startDownload()" style="
+        width:100%; background:#003366; border:none; color:#fff;
+        padding:10px; border-radius:4px; font-size:.88rem; font-weight:700;
+        cursor:pointer; font-family:inherit; transition:background .15s;
+        margin-bottom:14px;">
+      ▶ ダウンロード開始
+    </button>
+
+    <!-- ログ表示 -->
+    <div id="dl-log-wrap" style="display:none;">
+      <div style="font-size:.75rem; font-weight:700; color:#003366; margin-bottom:5px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+        <span>実行ログ</span>
+        <span id="dl-status-badge" style="
+            background:#E8F4FC; color:#0055AA; border:1px solid #0055AA;
+            font-size:.68rem; padding:1px 8px; border-radius:20px; font-weight:700;"></span>
+        <button id="dl-btn-stop" onclick="stopDownload()" style="
+            display:none; margin-left:auto;
+            background:#fdecea; border:1px solid #CC0000; color:#CC0000;
+            padding:2px 10px; border-radius:4px; font-size:.72rem; font-weight:700;
+            cursor:pointer; font-family:inherit;">
+          ⏹ 停止
+        </button>
+      </div>
+      <div id="dl-log" style="
+          background:#f4f6f9; border:1px solid #c8d6e5; border-radius:4px;
+          padding:10px; font-size:.75rem; font-family:monospace;
+          height:220px; overflow-y:auto; line-height:1.6; color:#1a2a3a;
+          white-space:pre-wrap; word-break:break-all;"></div>
+      <button id="dl-btn-refresh" onclick="loadDates()" style="
+          display:none; margin-top:10px; width:100%;
+          background:#E8F4FC; border:1px solid #003366; color:#003366;
+          padding:8px; border-radius:4px; font-size:.83rem; font-weight:700;
+          cursor:pointer; font-family:inherit;">
+        🔄 動画リストを更新
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- フレーズ登録モーダル -->
+<div id="add-phrase-overlay" onclick="closeAddPhraseModal(event)" style="
+    display:none; position:fixed; inset:0;
+    background:rgba(0,20,50,.5); z-index:200;
+    align-items:center; justify-content:center;">
+  <div id="add-phrase-modal" style="
+      background:#fff; border-top:4px solid var(--navy);
+      border-radius:6px; padding:24px; width:min(480px,94vw);
+      max-height:80vh; overflow-y:auto; position:relative;
+      box-shadow:0 8px 32px rgba(0,20,50,.2);">
+    <button onclick="closeAddPhraseModal()" style="position:absolute;top:12px;right:14px;background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:1.1rem">✕</button>
+    <h3 style="font-size:.92rem;font-weight:700;color:var(--navy);margin-bottom:16px">📌 フレーズを登録</h3>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div>
+        <label style="font-size:.73rem;font-weight:700;color:var(--navy);display:block;margin-bottom:3px">英語フレーズ *</label>
+        <input id="ap-en" type="text" style="width:100%;border:1px solid var(--border-mid);border-radius:4px;padding:7px 10px;font-size:.84rem;outline:none;font-family:inherit;color:var(--text)"
+          placeholder="例: off the beaten path">
+      </div>
+      <div>
+        <label style="font-size:.73rem;font-weight:700;color:var(--navy);display:block;margin-bottom:3px">日本語訳</label>
+        <input id="ap-ja" type="text" style="width:100%;border:1px solid var(--border-mid);border-radius:4px;padding:7px 10px;font-size:.84rem;outline:none;font-family:inherit;color:var(--text)"
+          placeholder="例: 人里離れた場所">
+      </div>
+      <div>
+        <label style="font-size:.73rem;font-weight:700;color:var(--navy);display:block;margin-bottom:3px">メモ・解説</label>
+        <textarea id="ap-note" rows="2" style="width:100%;border:1px solid var(--border-mid);border-radius:4px;padding:7px 10px;font-size:.84rem;outline:none;font-family:inherit;color:var(--text);resize:vertical"
+          placeholder="使い方・ニュアンスなど"></textarea>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <input id="ap-top" type="checkbox" style="width:15px;height:15px;cursor:pointer">
+        <label for="ap-top" style="font-size:.78rem;font-weight:600;color:var(--text-dim);cursor:pointer">★ 重要フレーズとしてマーク</label>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:16px">
+      <button id="ap-btn-explain" onclick="apExplain()" style="
+          background:var(--lightblue);border:1px solid var(--blue);color:var(--blue);
+          padding:8px 14px;border-radius:4px;font-size:.78rem;font-weight:700;
+          cursor:pointer;font-family:inherit;transition:all .15s">
+        🔍 自動翻訳・解説取得
+      </button>
+      <button onclick="saveAddPhrase()" style="
+          flex:1;background:var(--navy);border:none;color:#fff;
+          padding:8px;border-radius:4px;font-size:.84rem;font-weight:700;
+          cursor:pointer;font-family:inherit;transition:background .15s">
+        💾 登録
+      </button>
+    </div>
+    <div id="ap-msg" style="margin-top:8px;font-size:.75rem;display:none"></div>
+  </div>
+</div>
+
+<!-- モーダル（ボキャブラリー詳細） -->
+<div id="modal-overlay" onclick="closeModal(event)">
+  <div id="modal">
+    <button class="modal-close" onclick="closeModal()">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+      </svg>
+    </button>
+    <div id="modal-content"></div>
+  </div>
+</div>
+
+<script>
+// ─────────────────────────────────────────────
+// 状態
+// ─────────────────────────────────────────────
+const state = {
+  currentVideo: null,
+  subtitlesEN: [],
+  subtitlesJA: [],
+  currentSubIdx: -1,
+  subtitleTimer: null,
+  currentSubText: '',
+  vocabQuery: '',
+  vocabTag: '',
+  vocabGroupView: false,
+  vocabFilter: 'all',
+  selectedModel: 'anthropic/claude-3-haiku',
+  showSubJa: false,
+  _lastClickedSubIdx: -1,
+};
+
+const video = document.getElementById('video-player');
+
+// ─────────────────────────────────────────────
+// パネル / ナビ
+// ─────────────────────────────────────────────
+function showPanel(id) {
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('panel-' + id).classList.add('active');
+}
+
+function showNav(name) {
+  document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.panel === name));
+  if (name === 'vocab') { showPanel('vocab'); loadTags(); loadVocab(); }
+  else { showPanel(state.currentVideo ? 'player' : 'welcome'); }
+}
+
+// ─────────────────────────────────────────────
+// サイドバートグル
+// ─────────────────────────────────────────────
+document.getElementById('btn-toggle-sidebar').onclick = () =>
+  document.getElementById('sidebar').classList.toggle('collapsed');
+
+// ─────────────────────────────────────────────
+// 右パネル タブ
+// ─────────────────────────────────────────────
+function switchTab(name) {
+  const names = ['phrases', 'detail', 'study', 'comments'];
+  document.querySelectorAll('.tab-btn').forEach((b, i) => b.classList.toggle('active', names[i] === name));
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  if (name === 'study') renderStudyCurrent();
+}
+
+// ─────────────────────────────────────────────
+// 日付ツリー
+// ─────────────────────────────────────────────
+async function loadDates() {
+  const tree = document.getElementById('date-tree');
+  tree.innerHTML = '<div class="loading"><div class="spinner"></div>読み込み中…</div>';
+  let dates = await apiFetch('/api/dates');
+  if (!dates || !dates.length) {
+    tree.innerHTML = '<div class="loading" style="flex-direction:column;text-align:center;gap:6px">'
+      + '<span style="color:var(--text-dim)">動画なし</span>'
+      + '<span style="font-size:.72rem;color:var(--text-muted)">URLからダウンロードしてください</span></div>';
+    return;
+  }
+
+  // フィルター適用
+  if (_currentFilter === 'today') {
+    const todayStr = new Date().toISOString().slice(0,10).replace(/-/g,'');
+    dates = dates.filter(d => d.date === todayStr);
+  } else if (_currentFilter === 'week') {
+    const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString().slice(0,10).replace(/-/g,'');
+    dates = dates.filter(d => d.date >= weekAgo);
+  }
+
+  if (!dates.length) {
+    tree.innerHTML = '<div class="loading" style="flex-direction:column;text-align:center;gap:6px">'
+      + '<span style="color:var(--text-dim)">該当期間の動画なし</span></div>';
+    return;
+  }
+
+  tree.innerHTML = '';
+  for (const d of dates) {
+    const g = document.createElement('div');
+    g.className = 'date-group';
+    g.innerHTML = `
+      <div class="date-header" onclick="toggleDate(this,'${d.date}')">
+        <svg class="date-arrow" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <polyline points="9 18 15 12 9 6"/>
+        </svg>
+        📅 ${d.display}
+        <span class="date-count">${d.count}</span>
+      </div>
+      <div class="video-list" id="vlist-${d.date}">
+        <div class="loading"><div class="spinner"></div></div>
+      </div>`;
+    tree.appendChild(g);
+  }
+
+  // 最新（先頭）日付を自動展開
+  const firstHeader = tree.querySelector('.date-header');
+  if (firstHeader) toggleDate(firstHeader, dates[0].date);
+}
+
+async function toggleDate(header, date) {
+  header.classList.toggle('open');
+  if (header.classList.contains('open')) await loadVideosForDate(date);
+}
+
+async function loadVideosForDate(date) {
+  const list = document.getElementById(`vlist-${date}`);
+  list.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  const videos = await apiFetch(`/api/dates/${date}/videos`);
+  list.innerHTML = '';
+  if (!videos.length) {
+    list.innerHTML = '<div style="padding:5px 8px;font-size:.76rem;color:var(--text-muted)">動画なし</div>';
+    return;
+  }
+  for (const v of videos) {
+    const el = document.createElement('div');
+    el.className = 'video-item';
+    el.innerHTML = `
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polygon points="5 3 19 12 5 21 5 3"/>
+      </svg>
+      <span class="video-item-title" title="${esc(v.title)}">${esc(v.title)}</span>`;
+    el.onclick = () => openVideo(v, el);
+    list.appendChild(el);
+  }
+}
+
+// ─────────────────────────────────────────────
+// 動画オープン
+// ─────────────────────────────────────────────
+async function openVideo(v, itemEl) {
+  document.querySelectorAll('.video-item').forEach(el => el.classList.remove('active'));
+  itemEl.classList.add('active');
+  state.currentVideo = v;
+  state.currentSubIdx = -1;
+  state.currentSubText = '';
+  clearInterval(state.subtitleTimer);
+
+  showPanel('player');
+  document.getElementById('header-title').textContent = v.title;
+  document.getElementById('video-title-text').textContent = v.title;
+  document.getElementById('video-channel').textContent = v.channel || '';
+
+  // 動画アクションボタン更新
+  const actionsEl = document.getElementById('video-actions');
+  actionsEl.innerHTML = '';
+  const btnStyle = 'border:none;padding:4px 8px;border-radius:4px;font-size:.72rem;font-weight:700;cursor:pointer;font-family:inherit';
+  if (v.video_id) {
+    const btnRefreshComments = document.createElement('button');
+    btnRefreshComments.textContent = '💬 コメント更新';
+    btnRefreshComments.style.cssText = btnStyle + ';background:#5a6f8a;color:#fff';
+    btnRefreshComments.onclick = () => refreshVideoComments(v.video_id);
+    actionsEl.appendChild(btnRefreshComments);
+
+    const btnFetchEn = document.createElement('button');
+    btnFetchEn.textContent = '🇬🇧 英語字幕';
+    btnFetchEn.style.cssText = btnStyle + ';background:#2980b9;color:#fff';
+    btnFetchEn.onclick = () => fetchEnSub(v.video_id);
+    actionsEl.appendChild(btnFetchEn);
+
+    const btnFetchJa = document.createElement('button');
+    btnFetchJa.textContent = '🇯🇵 和訳取得';
+    btnFetchJa.style.cssText = btnStyle + ';background:#27ae60;color:#fff';
+    btnFetchJa.onclick = () => fetchJaSub(v.video_id);
+    actionsEl.appendChild(btnFetchJa);
+
+    const btnDelete = document.createElement('button');
+    btnDelete.textContent = '🗑️ 削除';
+    btnDelete.style.cssText = btnStyle + ';background:var(--red);color:#fff';
+    btnDelete.onclick = () => deleteVideo(v.video_id, v.title);
+    actionsEl.appendChild(btnDelete);
+  }
+
+  document.getElementById('btn-explain-current').disabled = true;
+  document.getElementById('subtitle-en').textContent = '—';
+  document.getElementById('subtitle-ja').textContent = '';
+
+  // 動画ファイルの有無を確認
+  if (!v.mp4) {
+    showNoVideoAlert(v);
+  } else {
+    hideNoVideoAlert();
+    video.src = `/media/${v.mp4}`;
+    video.load();
+    video.onerror = () => showNoVideoAlert(v);
+  }
+
+  // 字幕読み込み（srt/video_id/lang → /api/srt/ へ、その他は /api/subtitle/ へ）
+  state.subtitlesEN = v.en_srt ? await fetchSRT(v.en_srt) : [];
+  state.subtitlesJA = v.ja_srt ? await fetchSRT(v.ja_srt) : [];
+
+  renderSubtitleList();
+
+  if (v.video_id) {
+    loadPhrases(v.video_id);
+    loadComments(v.video_id);
+  } else {
+    document.getElementById('tab-phrases-content').innerHTML = '<div class="loading">フレーズなし</div>';
+    document.getElementById('tab-comments-content').innerHTML = '<div class="detail-empty">動画IDがありません</div>';
+  }
+
+  state.subtitleTimer = setInterval(syncSubtitles, 200);
+
+  // 詳細タブをリセット
+  document.getElementById('tab-detail-content').innerHTML =
+    '<p class="detail-empty">字幕の「🔍 解説」ボタンか<br>フレーズの「解説」ボタンをクリックしてください</p>';
+}
+
+function showNoVideoAlert(v) {
+  video.src = '';
+  video.style.display = 'none';
+  const url = (v || state.currentVideo || {}).url || '';
+  let alertEl = document.getElementById('no-video-alert');
+  if (!alertEl) {
+    alertEl = document.createElement('div');
+    alertEl.id = 'no-video-alert';
+    document.getElementById('video-wrap').appendChild(alertEl);
+  }
+  alertEl.style.display = 'flex';
+  alertEl.innerHTML = '';
+
+  const inner = document.createElement('div');
+  inner.style.cssText = 'background:#0d1117;flex:1;padding:28px 20px;text-align:center;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;min-height:100px';
+
+  const title = document.createElement('div');
+  title.style.cssText = 'color:#f0a0a0;font-size:.92rem;font-weight:700';
+  title.textContent = '⚠ 動画ファイルが見つかりません';
+
+  const desc = document.createElement('div');
+  desc.style.cssText = 'color:#8090a8;font-size:.76rem;line-height:1.65';
+  desc.innerHTML = 'ローカルに mp4 ファイルがありません。<br>ダウンロードして DB に登録してください。';
+
+  inner.appendChild(title);
+  inner.appendChild(desc);
+
+  if (url) {
+    const btn = document.createElement('button');
+    btn.style.cssText = 'background:#CC0000;border:none;color:#fff;padding:7px 18px;border-radius:4px;font-size:.8rem;font-weight:700;cursor:pointer;font-family:inherit';
+    btn.textContent = '📥 この動画をダウンロード';
+    btn.onclick = () => dlVideoFromModal(url);
+    inner.appendChild(btn);
+  }
+
+  alertEl.appendChild(inner);
+}
+
+function hideNoVideoAlert() {
+  video.style.display = '';
+  const alert = document.getElementById('no-video-alert');
+  if (alert) alert.style.display = 'none';
+}
+
+// ─────────────────────────────────────────────
+// 字幕リスト描画
+// ─────────────────────────────────────────────
+// 文法難易度スコアリング（ローカル、API不要）
+function grammarDifficulty(text) {
+  let score = 0;
+  const t = text.toLowerCase();
+  const words = t.split(/\s+/).filter(Boolean);
+  const wc = words.length;
+
+  // 長さ
+  if (wc > 15) score += 1;
+  if (wc > 22) score += 1;
+
+  // 文法構造
+  const patterns = [
+    [/\b(had\s+\w+ed|had\s+been)\b/, 1, '過去完了'],
+    [/\b(were\s+to|should\s+have|would\s+have|could\s+have|might\s+have)\b/, 1, '仮定法'],
+    [/\bnot\s+only.+but\s+(also)?\b/, 1, '相関接続詞'],
+    [/\bit\s+(is|was|were)\s+.+\s+that\b/, 1, '強調構文'],
+    [/\b(having\s+\w+ed|being\s+\w+ed)\b/, 1, '分詞構文'],
+    [/\b(so\s+.+\s+that|such\s+.+\s+that)\b/, 1, 'so...that'],
+    [/\b(no\s+sooner|hardly|scarcely).+(than|when|before)\b/, 1, '倒置'],
+    [/\b(not\s+until|never\s+before|seldom|rarely)\b/, 1, '部分否定/倒置'],
+    [/\b(whoever|whatever|wherever|whenever|however)\b/, 1, '複合関係詞'],
+    [/\b(despite|notwithstanding|regardless\s+of)\b/, 1, '前置詞句'],
+    [/\b(lest|albeit|insofar|inasmuch)\b/, 2, '文語接続詞'],
+    [/,\s*(which|who|whose|where)\b/, 1, '関係詞節'],
+    [/\b\w+ing\b.{0,20}\b(is|are|was|were)\b/, 1, '動名詞主語'],
+  ];
+
+  const found = [];
+  for (const [re, pts, label] of patterns) {
+    if (re.test(t)) { score += pts; found.push(label); }
+  }
+
+  // 難易度レベル
+  let level = 0;
+  if (score >= 2) level = 1;
+  if (score >= 4) level = 2;
+  if (score >= 6) level = 3;
+  return { level, score, tags: found };
+}
+
+// YouTubeスライディングウィンドウ字幕の重複除去
+// YouTubeスライディングウィンドウ字幕の重複除去
+// パターン: "A" → "A B" → "A B C" → "B C" → "B C D" ...
+function dedupeSliding(subs) {
+  if (!subs.length) return subs;
+  const result = [];
+  for (let i = 0; i < subs.length; i++) {
+    const cur = subs[i];
+    if (!cur.text.trim()) continue;
+    const next = subs[i + 1];
+    const T = 2.5; // 重複判定の時間しきい値（秒）
+
+    // ① 次が現在のテキストを含む（現在は前半、次が拡張版）→ 現在をスキップ
+    if (next && (next.start - cur.start) < T && next.text.includes(cur.text)) continue;
+
+    if (result.length > 0) {
+      const prev = result[result.length - 1];
+      const dt = cur.start - prev.start;
+      if (cur.text === prev.text) continue; // 完全重複
+      if (dt < T) {
+        // ② 現在が前を含む（前の拡張版）→ 前を置換
+        if (cur.text.includes(prev.text)) {
+          result[result.length - 1] = cur;
+          continue;
+        }
+        // ③ 前が現在を含む（現在は次フレーズの開始、前の末尾と重複）→ 現在をスキップ
+        if (prev.text.includes(cur.text)) continue;
+      }
+    }
+    result.push(cur);
+  }
+  return result;
+}
+
+function renderSubtitleList() {
+  const scroll = document.getElementById('subtitle-scroll');
+  // EN字幕がなければJA字幕をフォールバック表示
+  const useJaOnly = !state.subtitlesEN.length && state.subtitlesJA.length > 0;
+  const rawSubs = useJaOnly ? state.subtitlesJA : state.subtitlesEN;
+  // スライディングウィンドウ重複除去
+  const subs = dedupeSliding(rawSubs);
+  if (!subs.length) {
+    scroll.innerHTML = '<div class="loading">字幕なし（🇬🇧 英語字幕ボタンで取得できます）</div>';
+    return;
+  }
+  scroll.innerHTML = '';
+  subs.forEach((s, i) => {
+    // JA-onlyモードでは右列不要（メイン列がJA）
+    const ja = useJaOnly ? null
+             : (state.subtitlesJA.find(j => s.start >= j.start && s.start < j.end)
+             || state.subtitlesJA.find(j => Math.abs(j.start - s.start) < 2.0));
+    const diff = useJaOnly ? { level: 0 } : grammarDifficulty(s.text);
+    const div = document.createElement('div');
+    div.className = 'sub-line';
+    div.dataset.idx = i;
+
+    // 時刻
+    const timeEl = document.createElement('span');
+    timeEl.className = 'sub-time';
+    timeEl.textContent = fmtTime(s.start);
+
+    // メイン列（EN or JA-only）
+    const textEl = document.createElement('div');
+    textEl.className = 'sub-body';
+    const textSpan = document.createElement('span');
+    textSpan.className = 'sub-text';
+    textSpan.textContent = s.text;
+    textEl.appendChild(textSpan);
+
+    // 右列（EN+JAモード時のみJA表示）
+    const jaEl = document.createElement('div');
+    jaEl.className = 'sub-ja';
+    jaEl.textContent = useJaOnly ? '' : (ja ? ja.text : '');
+
+    // 難易度バッジ
+    const diffEl = document.createElement('div');
+    diffEl.className = 'sub-difficulty';
+    if (diff.level > 0) {
+      const labels = ['', '💡', '💡💡', '💡💡💡'];
+      const badge = document.createElement('span');
+      badge.className = `diff-badge diff-${diff.level}`;
+      badge.textContent = labels[diff.level];
+      badge.title = diff.tags.join(', ');
+      diffEl.appendChild(badge);
+    }
+
+    const addBtn = document.createElement('button');
+    addBtn.className = 'sub-add-btn';
+    addBtn.title = 'フレーズ登録';
+    addBtn.textContent = '+';
+    addBtn.onclick = (e) => { e.stopPropagation(); openAddPhraseModal(null, s.text); };
+
+    div.appendChild(timeEl);
+    div.appendChild(textEl);
+    div.appendChild(jaEl);
+    div.appendChild(diffEl);
+    div.appendChild(addBtn);
+
+    div.onclick = () => {
+      if (state._lastClickedSubIdx === i && Math.abs(video.currentTime - s.start) < 1.0) {
+        // 同じ行を再度クリック → 再生
+        video.play();
+      } else {
+        // 初回クリック → シークして一時停止
+        video.currentTime = s.start;
+        video.pause();
+        state._lastClickedSubIdx = i;
+      }
+    };
+    scroll.appendChild(div);
+  });
+}
+
+// ─────────────────────────────────────────────
+// 字幕同期
+// ─────────────────────────────────────────────
+function syncSubtitles() {
+  const t = video.currentTime;
+  const useJaOnly = !state.subtitlesEN.length && state.subtitlesJA.length > 0;
+  const subs = dedupeSliding(useJaOnly ? state.subtitlesJA : state.subtitlesEN);
+  if (!subs.length) return;
+
+  // YouTube自動字幕はスライディングウィンドウで重複するため末尾から検索
+  let idx = -1;
+  for (let i = subs.length - 1; i >= 0; i--) {
+    if (t >= subs[i].start) { idx = i; break; }
+  }
+  // 終了時刻を大幅に過ぎていたら非表示（字幕間の空白）
+  if (idx >= 0 && t > subs[idx].end + 1.5) idx = -1;
+  if (idx === state.currentSubIdx) return;
+  state.currentSubIdx = idx;
+
+  const enEl = document.getElementById('subtitle-en');
+  const jaEl = document.getElementById('subtitle-ja');
+  const btn  = document.getElementById('btn-explain-current');
+
+  if (idx >= 0) {
+    const s = subs[idx];
+    enEl.textContent = s.text;
+    state.currentSubText = s.text;
+    const ja = state.subtitlesJA.find(j => s.start >= j.start && s.start < j.end)
+             || state.subtitlesJA.find(j => Math.abs(j.start - s.start) < 2.0);
+    jaEl.textContent = ja ? ja.text : '';
+    btn.disabled = false;
+  } else {
+    enEl.textContent = '—';
+    jaEl.textContent = '';
+    state.currentSubText = '';
+    btn.disabled = true;
+  }
+
+  // リストハイライト
+  const scroll = document.getElementById('subtitle-scroll');
+  scroll.querySelectorAll('.sub-line').forEach(el => el.classList.remove('current'));
+  if (idx >= 0) {
+    const cur = scroll.querySelector(`[data-idx="${idx}"]`);
+    if (cur) {
+      cur.classList.add('current');
+      cur.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+  }
+}
+
+// ─────────────────────────────────────────────
+// OpenRouter 解説
+// ─────────────────────────────────────────────
+async function explainText(text, context) {
+  switchTab('detail');
+  const container = document.getElementById('tab-detail-content');
+  container.innerHTML = `<div class="detail-query">${esc(text)}</div><div class="detail-loading"><div class="spinner"></div>OpenRouterで解析中…</div>`;
+
+  const data = await apiPost('/api/explain', { text, context: context || '' });
+  renderDetail(container, text, data);
+}
+
+function renderDetail(container, query, data) {
+  if (data.error) {
+    container.innerHTML = `<div class="detail-query">${esc(query)}</div>`
+      + `<div style="color:var(--danger);font-size:.82rem;padding:12px">${esc(data.error)}</div>`;
+    return;
+  }
+  let html = `<div class="detail-query">${esc(query)}</div>`;
+
+  if (data.level) {
+    html += `<div class="detail-section"><div class="detail-label">レベル</div>
+      <span class="detail-level level-${data.level}">${esc(data.level)}</span></div>`;
+  }
+  if (data.meaning) {
+    html += `<div class="detail-section"><div class="detail-label">意味・説明</div>
+      <div class="detail-value">${esc(data.meaning)}</div></div>`;
+  }
+  if (data.usage) {
+    html += `<div class="detail-section"><div class="detail-label">使い方・ニュアンス</div>
+      <div class="detail-value">${esc(data.usage)}</div></div>`;
+  }
+  if (data.example) {
+    html += `<div class="detail-section"><div class="detail-label">例文</div>
+      <div class="detail-value"><strong>${esc(data.example)}</strong>${data.example_ja ? '<br><span style="color:var(--text-dim)">' + esc(data.example_ja) + '</span>' : ''}</div></div>`;
+  }
+  if (data.related && data.related.length) {
+    html += `<div class="detail-section"><div class="detail-label">関連語・類語</div>
+      <div class="detail-tags" id="related-tags-main"></div></div>`;
+  }
+  container.innerHTML = html;
+  if (data.related && data.related.length) {
+    const tagsEl = container.querySelector('#related-tags-main');
+    data.related.forEach(r => {
+      const sp = document.createElement('span');
+      sp.className = 'detail-tag';
+      sp.textContent = r;
+      sp.style.cursor = 'pointer';
+      sp.onclick = () => explainText(r, '');
+      tagsEl.appendChild(sp);
+    });
+  }
+}
+
+function explainCurrent() {
+  if (!state.currentSubText) return;
+  explainText(state.currentSubText, '');
+}
+
+// ─────────────────────────────────────────────
+// フレーズ読み込み
+// ─────────────────────────────────────────────
+async function loadPhrases(videoId) {
+  const list = document.getElementById('tab-phrases-content');
+  list.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  const phrases = await apiFetch(`/api/video/${videoId}/phrases`);
+  list.innerHTML = '';
+  if (!phrases.length) {
+    list.innerHTML = '<div class="loading">フレーズなし</div>';
+    return;
+  }
+  phrases.forEach(p => list.appendChild(makePhraseCard(p)));
+}
+
+// フレーズのテキストからSRT字幕を検索して出現時間を返す
+function findPhraseTime(phraseEn) {
+  const subs = state.subtitlesEN;
+  if (!subs.length) return null;
+  const clean = phraseEn.replace(/\*\*/g,'').replace(/\*/g,'').replace(/`/g,'').toLowerCase().trim();
+  if (!clean || clean.length < 3) return null;
+  // フル一致
+  for (const s of subs) {
+    if (s.text.toLowerCase().includes(clean)) return s.start;
+  }
+  // 先頭4単語で検索
+  const words = clean.split(/\s+/).filter(w => w.length > 2).slice(0, 4).join(' ');
+  if (words.length > 5) {
+    for (const s of subs) {
+      if (s.text.toLowerCase().includes(words)) return s.start;
+    }
+  }
+  return null;
+}
+
+function jumpToTime(t) {
+  if (video.readyState === 0) return;
+  video.currentTime = t;
+  video.play();
+  if (!document.getElementById('panel-player').classList.contains('active')) {
+    showPanel('player');
+  }
+}
+
+function makePhraseCard(p) {
+  const t = findPhraseTime(p.phrase_en);
+  const timeBadge = t !== null
+    ? `<span class="phrase-time" onclick="jumpToTime(${t})" title="${fmtTime(t)} にジャンプ">▶ ${fmtTime(t)}</span>`
+    : '';
+  const div = document.createElement('div');
+  div.className = 'phrase-card' + (p.is_top ? ' top' : '');
+  div.style.cursor = 'pointer';
+  div.innerHTML = `
+    <div style="display:flex;align-items:flex-start;gap:6px;flex-wrap:wrap;margin-bottom:3px">
+      <div class="phrase-en" style="flex:1">${mdToHtml(p.phrase_en)}</div>
+      ${timeBadge}
+    </div>
+    ${p.phrase_ja ? `<div class="phrase-ja">${esc(p.phrase_ja)}</div>` : ''}
+    ${p.note ? `<div class="phrase-note">${mdToHtml(p.note)}</div>` : ''}
+    <div class="phrase-actions">
+      <button class="phrase-btn explain-btn" onclick="explainText('${esc(p.phrase_en)}','${esc(p.note||'')}')">解説</button>
+      <button class="phrase-btn ${p.is_top ? 'active' : ''}" onclick="toggleTop(${p.id},this)">★</button>
+      <button class="phrase-btn danger" onclick="deletePhrase(${p.id},this)">削除</button>
+    </div>`;
+  // カードクリックで詳細モーダル
+  div.addEventListener('click', e => {
+    if (e.target.closest('.phrase-btn')) return;
+    openPhraseModal(p);
+  });
+  return div;
+}
+
+async function toggleTop(id, btn) {
+  await apiPost(`/api/phrases/${id}/toggle_top`);
+  btn.closest('.phrase-card').classList.toggle('top');
+  btn.classList.toggle('active');
+}
+
+async function deletePhrase(id, btn) {
+  if (!confirm('このフレーズを削除しますか？')) return;
+  await apiFetch(`/api/phrases/${id}`, 'DELETE');
+  btn.closest('.phrase-card').remove();
+}
+
+// ─────────────────────────────────────────────
+// ボキャブラリー
+// ─────────────────────────────────────────────
+let vocabTimer = null;
+function onVocabSearch() {
+  clearTimeout(vocabTimer);
+  vocabTimer = setTimeout(() => { state.vocabQuery = document.getElementById('vocab-search').value; loadVocab(); }, 300);
+}
+
+function makeVocabCard(p) {
+  const card = document.createElement('div');
+  card.className = 'vocab-card' + (p.is_top ? ' top' : '');
+  card.innerHTML = `
+    <div class="phrase-en">${mdToHtml(p.phrase_en)}${p.is_top ? '<span class="top-badge">★</span>' : ''}</div>
+    ${p.phrase_ja ? `<div class="phrase-ja">${esc(p.phrase_ja)}</div>` : ''}
+    ${p.note ? `<div class="phrase-note">${mdToHtml(p.note)}</div>` : ''}
+    ${p.video_title ? `<div class="vocab-source">📹 ${esc(p.video_title)}</div>` : ''}
+    <div class="phrase-actions">
+      <button class="phrase-btn explain-btn" onclick="openVocabDetail(event,'${esc(p.phrase_en)}','${esc(p.note||'')}')">解説</button>
+      <button class="phrase-btn ${p.is_top ? 'active' : ''}" onclick="toggleVocabTop(event,${p.id},this)">★</button>
+      <button class="phrase-btn danger" onclick="deleteVocabPhrase(event,${p.id},this)">削除</button>
+    </div>`;
+  card.addEventListener('click', e => {
+    if (e.target.closest('.phrase-btn')) return;
+    openPhraseModal(p);
+  });
+  return card;
+}
+
+function setVocabFilter(mode) {
+  state.vocabFilter = mode;
+  ['all','top','current'].forEach(m => {
+    const btn = document.getElementById(`btn-vocab-${m}`);
+    if (!btn) return;
+    const active = m === mode;
+    btn.style.background = active ? 'var(--blue)' : '#fff';
+    btn.style.color = active ? '#fff' : 'var(--text-dim)';
+    btn.style.borderColor = active ? 'var(--blue)' : 'var(--border)';
+  });
+  loadVocab();
+}
+
+async function loadVocab() {
+  const grid = document.getElementById('vocab-grid');
+  grid.innerHTML = '<div class="loading"><div class="spinner"></div>読み込み中…</div>';
+  let url = `/api/phrases?page=1&per_page=200&q=${encodeURIComponent(state.vocabQuery)}`;
+  if (state.vocabTag) url += `&tag=${encodeURIComponent(state.vocabTag)}`;
+  if (state.vocabFilter === 'top') url += '&top_only=1';
+  if (state.vocabFilter === 'current' && state.currentVideo?.video_id) {
+    url = `/api/video/${state.currentVideo.video_id}/phrases`;
+  }
+  const raw = await apiFetch(url);
+  const data = Array.isArray(raw) ? { phrases: raw, total: raw.length } : raw;
+  document.getElementById('vocab-stats').textContent = data.total !== undefined ? `${data.total} フレーズ` : '';
+  grid.innerHTML = '';
+  if (!data.phrases || !data.phrases.length) {
+    grid.innerHTML = '<div class="loading">フレーズなし。先に dl_youtube_sub_llm.py を実行してください。</div>';
+    return;
+  }
+
+  if (state.vocabGroupView) {
+    // タグ別グループ表示
+    const groups = {};
+    const noTag = [];
+    data.phrases.forEach(p => {
+      const tags = (p.tags || '').split(',').map(t => t.trim()).filter(Boolean);
+      if (!tags.length) { noTag.push(p); return; }
+      tags.forEach(tag => {
+        if (!groups[tag]) groups[tag] = [];
+        groups[tag].push(p);
+      });
+    });
+    const allGroups = Object.keys(groups).sort();
+    allGroups.forEach(tag => {
+      const header = document.createElement('div');
+      header.className = 'vocab-group-header';
+      header.textContent = `# ${tag} (${groups[tag].length})`;
+      grid.appendChild(header);
+      groups[tag].forEach(p => grid.appendChild(makeVocabCard(p)));
+    });
+    if (noTag.length) {
+      const header = document.createElement('div');
+      header.className = 'vocab-group-header';
+      header.textContent = `# タグなし (${noTag.length})`;
+      grid.appendChild(header);
+      noTag.forEach(p => grid.appendChild(makeVocabCard(p)));
+    }
+  } else {
+    data.phrases.forEach(p => grid.appendChild(makeVocabCard(p)));
+  }
+}
+
+async function loadTags() {
+  const bar = document.getElementById('tag-filter-bar');
+  const tags = await apiFetch('/api/phrases/tags');
+  bar.innerHTML = `<span class="tag-chip ${!state.vocabTag ? 'active' : ''}" onclick="setTagFilter('')">すべて</span>`;
+  if (Array.isArray(tags)) {
+    tags.forEach(tag => {
+      const chip = document.createElement('span');
+      chip.className = 'tag-chip' + (state.vocabTag === tag ? ' active' : '');
+      chip.textContent = tag;
+      chip.onclick = () => setTagFilter(tag);
+      bar.appendChild(chip);
+    });
+  }
+}
+
+function setTagFilter(tag) {
+  state.vocabTag = tag;
+  document.querySelectorAll('.tag-chip').forEach(c => {
+    c.classList.toggle('active', c.textContent === (tag || 'すべて'));
+  });
+  loadVocab();
+}
+
+function toggleVocabGroupView() {
+  state.vocabGroupView = !state.vocabGroupView;
+  const btn = document.getElementById('btn-group-view');
+  btn.style.background = state.vocabGroupView ? 'var(--navy)' : '#fff';
+  btn.style.color = state.vocabGroupView ? '#fff' : 'var(--text-dim)';
+  loadVocab();
+}
+
+async function prefetchAllExplanations() {
+  showToast('解説一括取得を開始しました…', 'info');
+  const data = await apiPost('/api/phrases/prefetch', { model: state.selectedModel || 'anthropic/claude-3-haiku' });
+  if (data.error) {
+    showToast('エラー: ' + data.error, 'error');
+    return;
+  }
+  const jobId = data.job_id;
+  // ポーリングで進捗確認
+  const poll = setInterval(async () => {
+    const status = await apiFetch(`/api/phrases/prefetch/${jobId}`);
+    if (status.status === 'done') {
+      clearInterval(poll);
+      showToast(`✅ 解説一括取得完了 (${status.done}件)`, 'success');
+      loadVocab();
+      loadTags();
+    } else if (status.status === 'error') {
+      clearInterval(poll);
+      showToast('❌ 解説取得でエラーが発生しました', 'error');
+    } else if (status.total > 0) {
+      showToast(`解説取得中… ${status.done}/${status.total}件`, 'info');
+    }
+  }, 5000);
+}
+
+// ─── ネットワークビュー ───────────────────────────────────────
+let _netData = null;
+let _netAnim = null;
+let _netNodes = [];
+let _netEdges = [];
+
+function hideNetworkView() {
+  document.getElementById('network-view').style.display = 'none';
+  document.getElementById('vocab-grid').style.display = '';
+  document.getElementById('tag-filter-bar').style.display = '';
+  if (_netAnim) { cancelAnimationFrame(_netAnim); _netAnim = null; }
+}
+
+async function showNetworkView() {
+  document.getElementById('vocab-grid').style.display = 'none';
+  document.getElementById('tag-filter-bar').style.display = 'none';
+  document.getElementById('network-view').style.display = 'flex';
+  await renderNetwork();
+}
+
+async function buildNetwork() {
+  document.getElementById('network-stats').textContent = '関連を構築中…';
+  const r = await apiPost('/api/network/build', {});
+  document.getElementById('network-stats').textContent = `${r.links_created || 0} リンク生成`;
+  await renderNetwork();
+}
+
+async function renderNetwork() {
+  const data = await apiFetch('/api/network');
+  _netData = data;
+  const canvas = document.getElementById('network-canvas');
+  const rect = canvas.parentElement.getBoundingClientRect();
+  canvas.width = rect.width || 600;
+  canvas.height = (rect.height || 400) - 50;
+  const W = canvas.width, H = canvas.height;
+  const ctx = canvas.getContext('2d');
+
+  const nodes = data.nodes.map(n => ({
+    ...n,
+    x: W/2 + (Math.random()-0.5)*W*0.6,
+    y: H/2 + (Math.random()-0.5)*H*0.6,
+    vx: 0, vy: 0,
+  }));
+  const nodeMap = {};
+  nodes.forEach(n => nodeMap[n.id] = n);
+  const edges = data.links.filter(l => nodeMap[l.source] && nodeMap[l.target]);
+
+  document.getElementById('network-stats').textContent = `${nodes.length} フレーズ / ${edges.length} 関連`;
+
+  const TAG_COLORS = {
+    'イディオム': '#e74c3c', '上級': '#9b59b6', '英検1級': '#2980b9',
+    '単語': '#27ae60', '表現': '#f39c12', 'ビジネス': '#1abc9c',
+    '食・料理': '#e67e22', '感情': '#e91e63',
+  };
+  function nodeColor(n) {
+    if (n.is_top) return '#f0a000';
+    if (n.tags && n.tags[0] && TAG_COLORS[n.tags[0]]) return TAG_COLORS[n.tags[0]];
+    return '#7f8c8d';
+  }
+
+  let dragging = null, ox = 0, oy = 0;
+  canvas.onmousedown = e => {
+    const r2 = canvas.getBoundingClientRect();
+    const mx = e.clientX - r2.left, my = e.clientY - r2.top;
+    dragging = nodes.find(n => Math.hypot(n.x-mx,n.y-my) < 10);
+    if (dragging) { ox = mx-dragging.x; oy = my-dragging.y; canvas.style.cursor='grabbing'; }
+  };
+  canvas.onmousemove = e => {
+    if (!dragging) return;
+    const r2 = canvas.getBoundingClientRect();
+    dragging.x = e.clientX - r2.left - ox;
+    dragging.y = e.clientY - r2.top - oy;
+    dragging.vx = 0; dragging.vy = 0;
+  };
+  canvas.onmouseup = () => { dragging = null; canvas.style.cursor='grab'; };
+
+  // tooltip
+  canvas.onmousemove = (e => {
+    const orig = canvas.onmousemove;
+    return ev => {
+      if (dragging) { orig && orig(ev); return; }
+      const r2 = canvas.getBoundingClientRect();
+      const mx = ev.clientX - r2.left, my = ev.clientY - r2.top;
+      const hover = nodes.find(n => Math.hypot(n.x-mx,n.y-my) < 12);
+      canvas.title = hover ? hover.label : '';
+    };
+  })();
+
+  if (_netAnim) cancelAnimationFrame(_netAnim);
+
+  function simulate() {
+    const K = 0.01, REPEL = 800, DAMP = 0.85;
+    nodes.forEach(a => {
+      nodes.forEach(b => {
+        if (a === b) return;
+        const dx = a.x - b.x, dy = a.y - b.y;
+        const d2 = dx*dx + dy*dy + 1;
+        const f = REPEL / d2;
+        a.vx += dx * f; a.vy += dy * f;
+      });
+      // center gravity
+      a.vx += (W/2 - a.x) * 0.002;
+      a.vy += (H/2 - a.y) * 0.002;
+    });
+    edges.forEach(e => {
+      const a = nodeMap[e.source], b = nodeMap[e.target];
+      if (!a || !b) return;
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const d = Math.sqrt(dx*dx+dy*dy)+0.1;
+      const f = (d - 80) * K;
+      const fx = dx/d*f, fy = dy/d*f;
+      a.vx += fx; a.vy += fy;
+      b.vx -= fx; b.vy -= fy;
+    });
+    nodes.forEach(n => {
+      if (n === dragging) return;
+      n.vx *= DAMP; n.vy *= DAMP;
+      n.x = Math.max(15, Math.min(W-15, n.x + n.vx));
+      n.y = Math.max(15, Math.min(H-15, n.y + n.vy));
+    });
+
+    ctx.clearRect(0, 0, W, H);
+    // edges
+    ctx.lineWidth = 1;
+    edges.forEach(e => {
+      const a = nodeMap[e.source], b = nodeMap[e.target];
+      if (!a || !b) return;
+      ctx.strokeStyle = e.type === 'related' ? 'rgba(100,150,200,0.4)' : 'rgba(150,150,150,0.3)';
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    });
+    // nodes
+    nodes.forEach(n => {
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, n.is_top ? 9 : 6, 0, Math.PI*2);
+      ctx.fillStyle = nodeColor(n);
+      ctx.fill();
+      if (n.is_top) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke(); }
+      ctx.fillStyle = '#333';
+      ctx.font = '9px sans-serif';
+      ctx.fillText(n.label.substring(0,15), n.x+10, n.y+3);
+    });
+
+    _netAnim = requestAnimationFrame(simulate);
+  }
+  simulate();
+}
+
+async function fetchEnSub(videoId) {
+  showToast('英語字幕を取得中…', 'info');
+  const data = await apiPost(`/api/video/${videoId}/fetch_en_sub`, {});
+  if (data.error) {
+    showToast('❌ ' + data.error, 'error');
+    return;
+  }
+  showToast(`✅ 英語字幕 ${data.count}文を取得しました`, 'success');
+  state.subtitlesEN = data.subtitles || [];
+  renderSubtitleList();
+}
+
+async function fetchJaSub(videoId) {
+  showToast('日本語字幕を取得中…', 'info');
+  const data = await apiPost(`/api/video/${videoId}/fetch_ja_sub`, {});
+  if (data.error) {
+    showToast('❌ ' + data.error, 'error');
+    return;
+  }
+  showToast(`✅ 日本語字幕 ${data.count}文を取得しました`, 'success');
+  // 字幕をリロード
+  if (state.currentVideo?.ja_srt) {
+    state.subtitlesJA = await fetchSRT(state.currentVideo.ja_srt);
+  } else {
+    state.subtitlesJA = data.subtitles || [];
+  }
+  renderSubtitleList();
+}
+
+async function deleteVideo(videoId, title) {
+  if (!confirm(`「${title}」を削除しますか？\n（DB・ローカルファイル・フレーズ・コメントも削除されます）`)) return;
+  const r = await fetch(`/api/video/${videoId}`, { method: 'DELETE' });
+  const data = await r.json();
+  if (data.error) { showToast('削除失敗: ' + data.error, 'error'); return; }
+  showToast('削除しました', 'success');
+  // サイドバー再読み込み
+  state.currentVideo = null;
+  showPanel('welcome');
+  loadDates();
+  loadStats();
+}
+
+async function refreshVideoComments(videoId) {
+  showToast('コメント再取得中…', 'info');
+  const data = await apiPost(`/api/video/${videoId}/comments/refresh`, { model: state.selectedModel || 'anthropic/claude-3-haiku' });
+  if (data.error) { showToast('エラー: ' + data.error, 'error'); return; }
+  const jobId = data.job_id;
+  const poll = setInterval(async () => {
+    const status = await apiFetch(`/api/comments/fetch_all/${jobId}`);
+    if (status.status === 'done') {
+      clearInterval(poll);
+      showToast('✅ コメント更新完了', 'success');
+      loadComments(videoId);
+    } else if (status.status === 'error') {
+      clearInterval(poll);
+      showToast('❌ コメント取得エラー', 'error');
+    }
+  }, 3000);
+}
+
+async function fetchAllComments() {
+  showToast('コメント一括取得を開始しました…', 'info');
+  const data = await apiPost('/api/comments/fetch_all', { model: state.selectedModel || 'anthropic/claude-3-haiku' });
+  if (data.error) {
+    showToast('エラー: ' + data.error, 'error');
+    return;
+  }
+  const jobId = data.job_id;
+  const poll = setInterval(async () => {
+    const status = await apiFetch(`/api/comments/fetch_all/${jobId}`);
+    if (status.status === 'done') {
+      clearInterval(poll);
+      showToast(`✅ コメント取得完了 (${status.done}件の動画)`, 'success');
+      if (state.currentVideo?.video_id) loadComments(state.currentVideo.video_id);
+    } else if (status.status === 'error') {
+      clearInterval(poll);
+      showToast('❌ コメント取得でエラーが発生しました', 'error');
+    } else if (status.total > 0) {
+      showToast(`コメント取得中… ${status.done}/${status.total}件`, 'info');
+    }
+  }, 5000);
+}
+
+async function openPhraseModal(p) {
+  const content = document.getElementById('modal-content');
+
+  // 基本情報を先に表示
+  content.innerHTML = `
+    <h3 style="font-size:1.1rem;font-weight:700;color:var(--navy);margin-bottom:8px">${mdToHtml(p.phrase_en)}</h3>
+    ${p.phrase_ja ? `<div style="font-size:.9rem;color:var(--blue);margin-bottom:10px;font-weight:600">${esc(p.phrase_ja)}</div>` : ''}
+    ${p.note ? `<div style="font-size:.84rem;color:var(--text-dim);line-height:1.75;background:var(--bg-surface);border:1px solid var(--border);padding:12px;border-radius:4px;margin-bottom:12px">${mdToHtml(p.note)}</div>` : ''}
+    <div id="modal-video-info" style="margin-bottom:12px">
+      <div class="loading" style="padding:12px 0"><div class="spinner"></div>動画情報を取得中…</div>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button onclick="openVocabDetail(event,'${esc(p.phrase_en)}','${esc(p.note||'')}');closeModal()" style="
+          flex:1;background:var(--navy);border:none;color:#fff;padding:8px;
+          border-radius:4px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;
+          transition:background .15s">
+        🔍 英検1級解説
+      </button>
+    </div>`;
+  document.getElementById('modal-overlay').classList.add('open');
+
+  // フレーズIDがない場合（vocab一覧から来た時など）はスキップ
+  if (!p.id) {
+    document.getElementById('modal-video-info').innerHTML = '';
+    return;
+  }
+
+  // 動画リンク情報を非同期取得
+  const vinfo = await apiFetch(`/api/phrase/${p.id}/video`);
+  const vi = document.getElementById('modal-video-info');
+  if (!vi) return;
+
+  if (vinfo.error || !vinfo.video_id) {
+    vi.innerHTML = '';
+    return;
+  }
+
+  const fileExists = vinfo.file_exists;
+  vi.innerHTML = `
+    <div style="background:var(--lightblue);border:1px solid var(--border);border-radius:4px;padding:10px 12px">
+      <div style="font-size:.7rem;font-weight:700;color:var(--navy);margin-bottom:6px;text-transform:uppercase;letter-spacing:.05em">
+        📹 出典動画
+      </div>
+      <div style="font-size:.85rem;font-weight:700;color:var(--navy);margin-bottom:2px">${esc(vinfo.title||'')}</div>
+      ${vinfo.channel ? `<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:8px">${esc(vinfo.channel)}</div>` : ''}
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        ${fileExists ? `
+        <button onclick="playVideoFromModal(${JSON.stringify(vinfo).replace(/"/g,'&quot;')})" style="
+            background:var(--navy);border:none;color:#fff;
+            padding:6px 14px;border-radius:4px;font-size:.78rem;font-weight:700;
+            cursor:pointer;font-family:inherit;transition:background .15s">
+          ▶ 再生
+        </button>` : `
+        <button onclick="dlVideoFromModal('${esc(vinfo.url||'')}');closeModal()" style="
+            background:var(--red);border:none;color:#fff;
+            padding:6px 14px;border-radius:4px;font-size:.78rem;font-weight:700;
+            cursor:pointer;font-family:inherit;transition:background .15s">
+          📥 DL
+        </button>`}
+        ${vinfo.url ? `<a href="${esc(vinfo.url)}" target="_blank" style="
+            display:inline-flex;align-items:center;
+            background:#fff;border:1px solid var(--border-mid);color:var(--text-dim);
+            padding:5px 12px;border-radius:4px;font-size:.78rem;font-weight:600;
+            text-decoration:none;transition:border-color .15s">
+          🔗 YouTube
+        </a>` : ''}
+      </div>
+    </div>`;
+}
+
+function playVideoFromModal(vinfo) {
+  closeModal();
+  // サイドバーで対応する動画アイテムを探してクリック
+  if (!vinfo.media_path) return;
+  const stem = vinfo.media_path.split('/').pop().replace('.mp4','');
+  const items = document.querySelectorAll('.video-item');
+  for (const el of items) {
+    if (el.querySelector('.video-item-title')?.title?.includes(vinfo.title?.slice(0,10) || stem)) {
+      el.click();
+      return;
+    }
+  }
+  // 見つからなければ直接ロード
+  const v = {
+    stem,
+    title:    vinfo.title || stem,
+    channel:  vinfo.channel || '',
+    video_id: vinfo.video_id,
+    mp4:      vinfo.media_path,
+    en_srt:   vinfo.en_srt || null,
+    ja_srt:   vinfo.ja_srt || null,
+  };
+  // 対応する日付ツリーを開いてから再生
+  const date = (vinfo.date || vinfo.media_path || '').split('/')[0];
+  if (date && date.match(/^\d{8}$/)) {
+    const header = [...document.querySelectorAll('.date-header')]
+      .find(h => h.textContent.includes(date.slice(0,4)+'/'+date.slice(4,6)+'/'+date.slice(6,8)));
+    if (header && !header.classList.contains('open')) {
+      toggleDate(header, date).then(() => {
+        setTimeout(() => {
+          const items2 = document.querySelectorAll('.video-item');
+          for (const el of items2) {
+            if (el.querySelector('.video-item-title')?.textContent?.includes(stem.slice(0,15))) {
+              el.click(); return;
+            }
+          }
+          openVideo(v, document.createElement('div'));
+        }, 400);
+      });
+      return;
+    }
+  }
+  openVideo(v, document.createElement('div'));
+  showNav('dates');
+}
+
+function dlVideoFromModal(url) {
+  openDlModal();
+  setTimeout(() => {
+    document.getElementById('dl-urls').value = url;
+  }, 50);
+}
+
+async function openVocabDetail(e, phrase, note) {
+  e.stopPropagation();
+  const modal = document.getElementById('modal-overlay');
+  const content = document.getElementById('modal-content');
+  content.innerHTML = `<div class="detail-query">${esc(phrase)}</div><div class="detail-loading"><div class="spinner"></div>OpenRouterで解析中…</div>`;
+  modal.classList.add('open');
+  const data = await apiPost('/api/explain', { text: phrase, context: note });
+  renderDetail(content, phrase, data);
+}
+
+async function toggleVocabTop(e, id, btn) {
+  e.stopPropagation();
+  await apiPost(`/api/phrases/${id}/toggle_top`);
+  const card = btn.closest('.vocab-card');
+  card.classList.toggle('top');
+  btn.classList.toggle('active');
+  const badge = card.querySelector('.top-badge');
+  if (badge) badge.remove();
+  else card.querySelector('.phrase-en').insertAdjacentHTML('beforeend', '<span class="top-badge">★</span>');
+}
+
+async function deleteVocabPhrase(e, id, btn) {
+  e.stopPropagation();
+  if (!confirm('このフレーズを削除しますか？')) return;
+  await apiFetch(`/api/phrases/${id}`, 'DELETE');
+  btn.closest('.vocab-card').remove();
+}
+
+function closeModal(e) {
+  if (!e || e.target === document.getElementById('modal-overlay')) {
+    document.getElementById('modal-overlay').classList.remove('open');
+  }
+}
+
+// ─────────────────────────────────────────────
+// コメント
+// ─────────────────────────────────────────────
+async function loadComments(videoId) {
+  const el = document.getElementById('tab-comments-content');
+  el.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  const data = await apiFetch(`/api/video/${videoId}/comments`);
+  if (!data || !data.length) {
+    el.innerHTML = '<div class="detail-empty">コメントなし<br><small>次回DL時に取得されます</small></div>';
+    return;
+  }
+  el.innerHTML = '';
+  data.forEach(c => {
+    const div = document.createElement('div');
+    div.className = 'comment-card';
+
+    const author = document.createElement('div');
+    author.className = 'comment-author';
+    author.textContent = '👤 ' + c.author;
+
+    const textDiv = document.createElement('div');
+    textDiv.className = 'comment-text';
+    textDiv.textContent = c.text;
+    textDiv.style.cursor = 'text';
+    textDiv.style.userSelect = 'text';
+
+    const likes = document.createElement('div');
+    likes.className = 'comment-likes';
+    likes.textContent = '👍 ' + c.likes;
+
+    // 選択テキストのポップアップメニュー
+    const popup = document.createElement('div');
+    popup.style.cssText = 'display:none;position:absolute;background:var(--navy);color:#fff;border-radius:4px;padding:4px;gap:4px;z-index:100;flex-direction:row';
+    const btnExplainSel = document.createElement('button');
+    btnExplainSel.textContent = '🔍 解説';
+    btnExplainSel.style.cssText = 'border:none;background:rgba(255,255,255,0.15);color:#fff;padding:3px 8px;border-radius:3px;font-size:.72rem;cursor:pointer;font-family:inherit';
+    const btnRegSel = document.createElement('button');
+    btnRegSel.textContent = '+ 登録';
+    btnRegSel.style.cssText = btnExplainSel.style.cssText;
+    popup.appendChild(btnExplainSel);
+    popup.appendChild(btnRegSel);
+    div.appendChild(popup);
+
+    textDiv.addEventListener('mouseup', () => {
+      const sel = window.getSelection();
+      const selected = sel ? sel.toString().trim() : '';
+      if (selected.length > 1) {
+        const range = sel.getRangeAt(0);
+        const rect = range.getBoundingClientRect();
+        const pRect = div.getBoundingClientRect();
+        popup.style.display = 'flex';
+        popup.style.left = (rect.left - pRect.left) + 'px';
+        popup.style.top = (rect.top - pRect.top - 36) + 'px';
+        btnExplainSel.onclick = (e) => { e.stopPropagation(); popup.style.display='none'; explainText(selected, c.text); };
+        btnRegSel.onclick = (e) => { e.stopPropagation(); popup.style.display='none'; openAddPhraseModal(null, selected); };
+      } else {
+        popup.style.display = 'none';
+      }
+    });
+
+    const actions = document.createElement('div');
+    actions.className = 'phrase-actions';
+    actions.style.marginTop = '6px';
+
+    const btnExplain = document.createElement('button');
+    btnExplain.className = 'phrase-btn explain-btn';
+    btnExplain.textContent = '🔍 コメント全体を解説';
+    btnExplain.onclick = () => explainText(c.text, '');
+
+    const btnReg = document.createElement('button');
+    btnReg.className = 'phrase-btn';
+    btnReg.textContent = '+ 登録';
+    btnReg.onclick = () => openAddPhraseModal(null, c.text);
+
+    actions.appendChild(btnExplain);
+    actions.appendChild(btnReg);
+
+    div.appendChild(author);
+    div.appendChild(textDiv);
+    div.appendChild(likes);
+    div.appendChild(actions);
+
+    // ポップアップを閉じる
+    div.addEventListener('click', () => { popup.style.display = 'none'; });
+
+    el.appendChild(div);
+  });
+}
+
+// ─────────────────────────────────────────────
+// フレーズ登録モーダル
+// ─────────────────────────────────────────────
+function openAddPhraseModal(e, text) {
+  if (e) e.stopPropagation();
+  document.getElementById('ap-en').value = text || '';
+  document.getElementById('ap-ja').value = '';
+  document.getElementById('ap-note').value = '';
+  document.getElementById('ap-top').checked = false;
+  document.getElementById('ap-msg').style.display = 'none';
+  document.getElementById('add-phrase-overlay').style.display = 'flex';
+  setTimeout(() => document.getElementById('ap-en').focus(), 50);
+}
+
+function closeAddPhraseModal(e) {
+  if (e && e.target !== document.getElementById('add-phrase-overlay')) return;
+  document.getElementById('add-phrase-overlay').style.display = 'none';
+}
+
+async function apExplain() {
+  const phrase = document.getElementById('ap-en').value.trim();
+  if (!phrase) return;
+  const btn = document.getElementById('ap-btn-explain');
+  btn.disabled = true; btn.textContent = '解析中…';
+  const data = await apiPost('/api/explain', { text: phrase, context: '' });
+  btn.disabled = false; btn.textContent = '🔍 自動翻訳・解説取得';
+  if (data.error) { showApMsg(data.error, 'error'); return; }
+  if (data.meaning && !document.getElementById('ap-ja').value) {
+    // 意味の先頭行を日本語訳として設定
+    document.getElementById('ap-ja').value = (data.meaning || '').split('。')[0].slice(0, 60);
+  }
+  if (data.usage) {
+    document.getElementById('ap-note').value = [
+      data.usage,
+      data.example ? `例: ${data.example}` : '',
+    ].filter(Boolean).join('\n');
+  }
+}
+
+async function saveAddPhrase() {
+  const phrase_en = document.getElementById('ap-en').value.trim();
+  if (!phrase_en) { showApMsg('英語フレーズを入力してください', 'error'); return; }
+  const body = {
+    phrase_en,
+    phrase_ja: document.getElementById('ap-ja').value.trim(),
+    note:      document.getElementById('ap-note').value.trim(),
+    is_top:    document.getElementById('ap-top').checked,
+    video_id:  state.currentVideo?.video_id || null,
+  };
+  const data = await apiPost('/api/phrases', body);
+  if (data.error) { showApMsg(data.error, 'error'); return; }
+  showApMsg('✅ フレーズを登録しました！', 'success');
+  showToast('✅ フレーズを登録しました', 'success');
+  // フレーズリストを更新
+  if (state.currentVideo?.video_id) loadPhrases(state.currentVideo.video_id);
+  setTimeout(() => closeAddPhraseModal(), 800);
+}
+
+function showApMsg(text, type) {
+  const el = document.getElementById('ap-msg');
+  el.textContent = text;
+  el.style.color = type === 'error' ? '#CC0000' : '#1a7a4a';
+  el.style.display = 'block';
+}
+
+// ─────────────────────────────────────────────
+// API ユーティリティ
+// ─────────────────────────────────────────────
+// SRT 取得: srt/{video_id}/{lang} → /api/srt/ エンドポイント、それ以外は /api/subtitle/
+async function fetchSRT(path) {
+  if (!path) return [];
+  try {
+    const url = path.startsWith('srt/') ? `/api/${path}` : `/api/subtitle/${path}`;
+    const r = await fetch(url);
+    const data = await r.json();
+    return Array.isArray(data) ? data : [];
+  } catch { return []; }
+}
+
+async function apiFetch(url, method = 'GET') {
+  try {
+    const r = await fetch(url, { method });
+    return await r.json();
+  } catch { return {}; }
+}
+
+async function apiPost(url, body = {}) {
+  try {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    return await r.json();
+  } catch (e) { return { error: String(e) }; }
+}
+
+function fmtTime(sec) {
+  const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
+  return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+}
+
+function esc(str) {
+  return String(str || '')
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;')
+    .replace(/'/g,'&#39;');
+}
+
+// マークダウン → HTML（**bold**, *italic*, 改行）
+function mdToHtml(str) {
+  return esc(str)
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g,     '<em>$1</em>')
+    .replace(/`(.+?)`/g,       '<code style="background:#E8F4FC;padding:1px 4px;border-radius:3px;font-size:.9em">$1</code>')
+    .replace(/\n/g,            '<br>');
+}
+
+// ─────────────────────────────────────────────
+// 学習モード（時系列センテンス確認 + スクリーンショット）
+// ─────────────────────────────────────────────
+const studyState = { idx: 0 };
+
+function renderStudyCurrent() {
+  const subs = state.subtitlesEN;
+  if (!subs.length) {
+    document.getElementById('study-en').textContent = '字幕なし';
+    document.getElementById('study-ja').textContent = '';
+    document.getElementById('study-progress').textContent = '';
+    document.getElementById('study-detail-area').innerHTML = '';
+    return;
+  }
+
+  // 現在の動画時間に最も近いセンテンスを選択
+  if (state.currentSubIdx >= 0 && studyState.idx !== state.currentSubIdx) {
+    studyState.idx = state.currentSubIdx;
+  }
+  const i = Math.max(0, Math.min(studyState.idx, subs.length - 1));
+  studyState.idx = i;
+  const s = subs[i];
+
+  document.getElementById('study-progress').textContent = `${i + 1} / ${subs.length}`;
+  document.getElementById('study-en').textContent = s.text;
+
+  const ja = state.subtitlesJA.find(j => s.start >= j.start && s.start < j.end)
+           || state.subtitlesJA.find(j => Math.abs(j.start - s.start) < 2.0);
+  document.getElementById('study-ja').textContent = ja ? ja.text : '';
+
+  // 動画をそのセンテンスの開始位置に移動してキャプチャ
+  video.currentTime = s.start;
+  document.getElementById('study-detail-area').innerHTML = '';
+  captureAfterSeek();
+}
+
+function captureAfterSeek() {
+  const canvas = document.getElementById('study-canvas');
+  const noShot = document.getElementById('study-no-screenshot');
+  const capture = () => {
+    if (video.readyState >= 2 && video.videoWidth) {
+      canvas.width  = video.videoWidth;
+      canvas.height = video.videoHeight;
+      canvas.getContext('2d').drawImage(video, 0, 0);
+      canvas.style.display = 'block';
+      noShot.style.display = 'none';
+    }
+  };
+  video.addEventListener('seeked', capture, { once: true });
+  // フォールバック: すでにseek済みの場合
+  setTimeout(capture, 300);
+}
+
+function studyPrev() {
+  studyState.idx = Math.max(0, studyState.idx - 1);
+  renderStudyCurrent();
+}
+
+function studyNext() {
+  studyState.idx = Math.min((state.subtitlesEN.length || 1) - 1, studyState.idx + 1);
+  renderStudyCurrent();
+}
+
+async function studyExplain() {
+  const subs = state.subtitlesEN;
+  if (!subs.length) return;
+  const s = subs[studyState.idx];
+  const btn = document.getElementById('btn-study-explain');
+  btn.disabled = true;
+  btn.textContent = '解析中…';
+
+  const detailArea = document.getElementById('study-detail-area');
+  detailArea.innerHTML = '<div class="detail-loading"><div class="spinner"></div>OpenRouter 英検1級解析中…</div>';
+
+  const data = await apiPost('/api/explain', { text: s.text, context: '', level: 'eiken1' });
+  btn.disabled = false;
+  btn.textContent = '🔍 英検1級解説';
+
+  if (data.error) {
+    detailArea.innerHTML = `<div style="color:var(--danger);font-size:.8rem;padding:10px">${esc(data.error)}</div>`;
+    return;
+  }
+
+  let html = '';
+  if (data.level) html += `<div class="detail-section"><span class="detail-level level-${data.level}">${esc(data.level)}</span></div>`;
+  if (data.meaning) html += `<div class="detail-section"><div class="detail-label">意味</div><div class="detail-value">${esc(data.meaning)}</div></div>`;
+  if (data.usage)   html += `<div class="detail-section"><div class="detail-label">使い方・ニュアンス</div><div class="detail-value">${esc(data.usage)}</div></div>`;
+  if (data.etymology) html += `<div class="detail-section"><div class="detail-label">🌱 語源</div><div class="detail-value">${esc(data.etymology)}</div></div>`;
+  if (data.linguistics_note) html += `<div class="detail-section"><div class="detail-label">🔬 言語学的考察</div><div class="detail-value" style="font-size:.82rem;color:var(--text-dim)">${esc(data.linguistics_note)}</div></div>`;
+  if (data.story) html += `<div class="detail-section"><div class="detail-label">📖 覚え方ストーリー</div><div class="detail-value" style="background:#fffbe6;border-left:3px solid #f0a000;padding:6px 10px;border-radius:4px">${esc(data.story)}</div></div>`;
+  if (data.mnemonic) html += `<div class="detail-section"><div class="detail-label">🎵 ゴロ合わせ</div><div class="detail-value" style="background:#e8f4fc;border-left:3px solid var(--blue);padding:6px 10px;border-radius:4px">${esc(data.mnemonic)}</div></div>`;
+  if (data.example) html += `<div class="detail-section"><div class="detail-label">例文</div><div class="detail-value"><strong>${esc(data.example)}</strong>${data.example_ja ? '<br><span style="color:var(--text-dim)">' + esc(data.example_ja) + '</span>' : ''}</div></div>`;
+  if (data.eiken_note) html += `<div class="detail-section"><div class="detail-label">英検1級メモ</div><div class="detail-value" style="border-left:2px solid var(--warning);padding-left:8px">${esc(data.eiken_note)}</div></div>`;
+  if (data.related && data.related.length) html += `<div class="detail-section"><div class="detail-label">関連語</div><div class="detail-tags" id="related-tags-vocab"></div></div>`;
+  detailArea.innerHTML = html;
+  if (data.related && data.related.length) {
+    const tagsEl2 = detailArea.querySelector('#related-tags-vocab');
+    if (tagsEl2) data.related.forEach(r => {
+      const sp = document.createElement('span');
+      sp.className = 'detail-tag';
+      sp.textContent = r;
+      sp.style.cursor = 'pointer';
+      sp.onclick = () => explainText(r, '');
+      tagsEl2.appendChild(sp);
+    });
+  }
+}
+
+// キーボードショートカット
+document.addEventListener('keydown', e => {
+  // Esc でモーダルを閉じる
+  if (e.key === 'Escape') {
+    if (document.getElementById('add-phrase-overlay').style.display === 'flex') {
+      closeAddPhraseModal(); return;
+    }
+    if (document.getElementById('modal-overlay').classList.contains('open')) {
+      closeModal(); return;
+    }
+    if (document.getElementById('dl-overlay').style.display === 'flex') {
+      document.getElementById('dl-overlay').style.display = 'none';
+      if (_dlEs) { _dlEs.close(); _dlEs = null; }
+      return;
+    }
+  }
+  // 学習モード中のナビ
+  if (document.getElementById('tab-study').classList.contains('active')) {
+    if (e.key === 'ArrowLeft')  studyPrev();
+    if (e.key === 'ArrowRight') studyNext();
+    if (e.key === 'Enter')      studyExplain();
+  }
+});
+
+// ─────────────────────────────────────────────
+// ダウンロードモーダル
+// ─────────────────────────────────────────────
+let _dlEs = null;
+let _dlJobId = null;
+
+function openDlModal() {
+  document.getElementById('dl-overlay').style.display = 'flex';
+  document.getElementById('dl-log-wrap').style.display = 'none';
+  document.getElementById('dl-log').textContent = '';
+  document.getElementById('dl-btn-refresh').style.display = 'none';
+  document.getElementById('dl-btn-stop').style.display = 'none';
+  document.getElementById('dl-btn-start').disabled = false;
+  document.getElementById('dl-btn-start').textContent = '▶ ダウンロード開始';
+  document.getElementById('dl-status-badge').textContent = '';
+}
+
+function closeDlModal(e) {
+  if (e && e.target !== document.getElementById('dl-overlay')) return;
+  document.getElementById('dl-overlay').style.display = 'none';
+  if (_dlEs) { _dlEs.close(); _dlEs = null; }
+}
+
+async function startDownload() {
+  const urls = document.getElementById('dl-urls').value.trim();
+  if (!urls) { alert('URLを入力してください'); return; }
+
+  const body = {
+    urls,
+    mode:  document.getElementById('dl-mode').value,
+    model: document.getElementById('dl-model').value,
+    lang:  document.getElementById('dl-lang').value,
+    top_n: parseInt(document.getElementById('dl-top').value),
+  };
+
+  const btn = document.getElementById('dl-btn-start');
+  btn.disabled = true;
+  btn.textContent = '実行中…';
+
+  const res = await fetch('/api/download', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json();
+  if (data.error) { alert(data.error); btn.disabled = false; btn.textContent = '▶ ダウンロード開始'; return; }
+
+  _dlJobId = data.job_id;
+  const logEl    = document.getElementById('dl-log');
+  const badgeEl  = document.getElementById('dl-status-badge');
+  const logWrap  = document.getElementById('dl-log-wrap');
+  const stopBtn  = document.getElementById('dl-btn-stop');
+  logEl.textContent = '';
+  logWrap.style.display = 'block';
+  stopBtn.style.display = 'inline-block';
+  badgeEl.textContent = '実行中';
+  badgeEl.style.cssText = 'background:#E8F4FC;color:#0055AA;border:1px solid #0055AA;font-size:.68rem;padding:1px 8px;border-radius:20px;font-weight:700;';
+
+  // 進捗状態を追跡
+  let _dlPhase = '';
+  function _setBadge(text, bg, color, border) {
+    badgeEl.textContent = text;
+    badgeEl.style.cssText = `background:${bg};color:${color};border:1px solid ${border};font-size:.68rem;padding:1px 8px;border-radius:20px;font-weight:700;`;
+  }
+
+  // SSE ストリーム
+  if (_dlEs) _dlEs.close();
+  _dlEs = new EventSource(`/api/download/stream/${data.job_id}`);
+  _dlEs.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.line) {
+      const line = msg.line;
+      const span = document.createElement('span');
+
+      // 進捗フェーズ検出 → バッジ更新
+      if (line.includes('動画DL中') || line.includes('[download]')) {
+        if (_dlPhase !== 'dl') { _dlPhase = 'dl'; _setBadge('📥 動画DL中', '#fff3e0', '#D4820A', '#D4820A'); }
+      } else if (line.includes('字幕') && line.includes('取得')) {
+        if (_dlPhase !== 'srt') { _dlPhase = 'srt'; _setBadge('📋 字幕取得中', '#e8f4fc', '#0055AA', '#0055AA'); }
+      } else if (line.includes('LLM') || line.includes('解析中') || line.includes('OpenRouter')) {
+        if (_dlPhase !== 'llm') { _dlPhase = 'llm'; _setBadge('🤖 LLM解析中', '#f3e8fc', '#7700aa', '#7700aa'); }
+      } else if (line.includes('DB') && (line.includes('登録') || line.includes('保存'))) {
+        if (_dlPhase !== 'db') { _dlPhase = 'db'; _setBadge('🗄️ DB登録中', '#e8fcef', '#1a7a4a', '#1a7a4a'); }
+      }
+
+      // 色分け
+      if (line.includes('✓') || line.includes('完了') || line.includes('Done') || line.includes('✅')) {
+        span.style.color = '#1a7a4a';
+      } else if (line.includes('✗') || line.includes('ERROR') || line.includes('エラー')) {
+        span.style.color = '#CC0000';
+      } else if (line.includes('⚠') || line.includes('警告') || line.includes('429')) {
+        span.style.color = '#D4820A';
+      } else if (line.startsWith('  ') || line.startsWith('[download]')) {
+        span.style.color = '#5070a0';
+      }
+      span.textContent = line + '\n';
+      logEl.appendChild(span);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+    if (msg.done) {
+      _dlEs.close(); _dlEs = null;
+      stopBtn.style.display = 'none';
+      if (msg.status === 'done') {
+        _setBadge('✅ 完了', '#e6f4ea', '#1a7a4a', '#1a7a4a');
+        document.getElementById('dl-btn-refresh').style.display = 'block';
+        showToast('✅ ダウンロード完了！動画リストを更新しました。', 'success');
+        loadDates();
+        loadWelcomeStats();
+      } else if (msg.status === 'cancelled') {
+        _setBadge('⏹ 停止済み', '#f5f5f5', '#666', '#999');
+        showToast('⏹ ダウンロードを停止しました。', 'info');
+      } else {
+        _setBadge('❌ エラー', '#fdecea', '#CC0000', '#CC0000');
+        showToast('❌ ダウンロードでエラーが発生しました。', 'error');
+      }
+      btn.disabled = false;
+      btn.textContent = '▶ 再実行';
+    }
+  };
+  _dlEs.onerror = () => {
+    _dlEs.close(); _dlEs = null;
+    stopBtn.style.display = 'none';
+    _setBadge('接続エラー', '#fdecea', '#CC0000', '#CC0000');
+    btn.disabled = false;
+    btn.textContent = '▶ 再実行';
+  };
+}
+
+async function stopDownload() {
+  if (!_dlJobId) return;
+  const r = await fetch(`/api/download/cancel/${_dlJobId}`, { method: 'POST' });
+  const d = await r.json();
+  if (d.success) {
+    document.getElementById('dl-btn-stop').style.display = 'none';
+    document.getElementById('dl-status-badge').textContent = '停止中…';
+  }
+}
+
+// ─────────────────────────────────────────────
+// トースト通知
+// ─────────────────────────────────────────────
+function showToast(msg, type = 'info') {
+  const colors = {
+    success: { bg: '#1a7a4a', icon: '✅' },
+    error:   { bg: '#CC0000', icon: '❌' },
+    info:    { bg: '#003366', icon: 'ℹ️'  },
+  };
+  const c = colors[type] || colors.info;
+  const toast = document.createElement('div');
+  toast.style.cssText = `
+    position:fixed; bottom:24px; right:24px; z-index:9999;
+    background:${c.bg}; color:#fff; padding:12px 20px;
+    border-radius:6px; font-size:.83rem; font-weight:600;
+    box-shadow:0 4px 20px rgba(0,0,0,.3); max-width:320px;
+    display:flex; align-items:center; gap:8px;
+    animation: toastIn .25s ease; font-family:inherit;`;
+  toast.innerHTML = `<span>${msg}</span>`;
+  document.body.appendChild(toast);
+  setTimeout(() => {
+    toast.style.opacity = '0'; toast.style.transition = 'opacity .3s';
+    setTimeout(() => toast.remove(), 300);
+  }, 4000);
+}
+
+// トーストアニメーション
+const _toastStyle = document.createElement('style');
+_toastStyle.textContent = '@keyframes toastIn { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:none; } }';
+document.head.appendChild(_toastStyle);
+
+// ─────────────────────────────────────────────
+// クイックフィルター（今日 / 今週 / すべて）
+// ─────────────────────────────────────────────
+let _currentFilter = 'all';
+
+async function setFilter(f) {
+  _currentFilter = f;
+  document.querySelectorAll('.quick-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById(`qbtn-${f}`).classList.add('active');
+  await loadDates();
+}
+
+// ─────────────────────────────────────────────
+// ヘッダー検索
+// ─────────────────────────────────────────────
+let _searchTimer = null;
+
+function onHeaderSearch() {
+  const q = document.getElementById('header-search').value.trim();
+  clearTimeout(_searchTimer);
+  _searchTimer = setTimeout(() => {
+    if (!q) return;
+    state.vocabQuery = q;
+    showNav('vocab');
+    document.getElementById('vocab-search').value = q;
+    loadVocab();
+  }, 400);
+}
+
+function onSearchFocus() {
+  document.getElementById('header-search-wrap').style.maxWidth = '420px';
+}
+
+function onSearchBlur() {
+  if (!document.getElementById('header-search').value) {
+    document.getElementById('header-search-wrap').style.maxWidth = '';
+  }
+}
+
+// ─────────────────────────────────────────────
+// ウェルカムダッシュボード統計
+// ─────────────────────────────────────────────
+async function loadWelcomeStats() {
+  const [phrasesData, dates] = await Promise.all([
+    apiFetch('/api/phrases?per_page=1'),
+    apiFetch('/api/dates'),
+  ]);
+  const total = phrasesData.total || 0;
+  const videoCount = Array.isArray(dates) ? dates.reduce((s, d) => s + (d.count || 0), 0) : 0;
+  const topData = await apiFetch('/api/phrases?per_page=1&top_only=1');
+  const topCount = topData.total || 0;
+
+  document.getElementById('stat-videos').textContent  = videoCount || '0';
+  document.getElementById('stat-phrases').textContent = total || '0';
+  document.getElementById('stat-top').textContent     = topCount || '0';
+
+  const bv = document.getElementById('badge-videos');
+  const bp = document.getElementById('badge-phrases');
+  if (bv) bv.textContent = videoCount || '';
+  if (bp) bp.textContent = total || '';
+
+  const fs = document.getElementById('footer-stats');
+  if (fs) fs.textContent = `${videoCount} 動画 · ${total} フレーズ`;
+}
+
+async function loadRecentVideos() {
+  const list = document.getElementById('recent-list');
+  if (!list) return;
+  const dates = await apiFetch('/api/dates');
+  if (!dates || !dates.length) {
+    list.innerHTML = '<div style="font-size:.82rem;color:var(--text-muted);padding:8px 0">動画なし。URLからダウンロードしてください。</div>';
+    return;
+  }
+  list.innerHTML = '';
+  let count = 0;
+  for (const d of dates) {
+    if (count >= 5) break;
+    const videos = await apiFetch(`/api/dates/${d.date}/videos`);
+    for (const v of (videos || [])) {
+      if (count >= 5) break;
+      const item = document.createElement('div');
+      item.className = 'recent-item';
+      item.innerHTML = `
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--navy);flex-shrink:0">
+          <polygon points="5 3 19 12 5 21 5 3"/>
+        </svg>
+        <span class="recent-item-title" title="${esc(v.title)}">${esc(v.title)}</span>
+        <span class="recent-item-date">${d.display}</span>`;
+      item.onclick = async () => {
+        showNav('dates');
+        // 日付ツリーの該当グループを展開してから再生
+        const header = [...document.querySelectorAll('.date-header')]
+          .find(h => h.textContent.includes(d.display));
+        if (header) {
+          if (!header.classList.contains('open')) await toggleDate(header, d.date);
+          else await loadVideosForDate(d.date);
+        } else {
+          await loadVideosForDate(d.date);
+        }
+        const vlist = document.getElementById(`vlist-${d.date}`);
+        if (vlist) {
+          for (const el of vlist.querySelectorAll('.video-item')) {
+            if (el.querySelector('.video-item-title')?.textContent?.trim() === v.title) {
+              el.click(); return;
+            }
+          }
+        }
+        openVideo(v, document.createElement('div'));
+      };
+      list.appendChild(item);
+      count++;
+    }
+  }
+}
+
+// ─────────────────────────────────────────────
+// 初期化
+// ─────────────────────────────────────────────
+async function init() {
+  await loadDates();
+  loadWelcomeStats();
+  loadRecentVideos();
+}
+
+init();
+</script>
+</body>
+</html>

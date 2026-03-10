@@ -67,6 +67,8 @@ import sqlite3
 import argparse
 import tempfile
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 import requests
 import yt_dlp
@@ -144,8 +146,20 @@ class PhraseDB:
                 phrase_ja   TEXT DEFAULT '',
                 note        TEXT DEFAULT '',
                 is_top      INTEGER DEFAULT 0,
+                explanation TEXT DEFAULT '',
+                tags        TEXT DEFAULT '',
                 created_at  TEXT DEFAULT (datetime('now', 'localtime')),
                 FOREIGN KEY (video_id) REFERENCES videos(video_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS video_comments (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                video_id    TEXT NOT NULL,
+                author      TEXT DEFAULT '',
+                text        TEXT NOT NULL,
+                likes       INTEGER DEFAULT 0,
+                explanation TEXT DEFAULT '',
+                created_at  TEXT DEFAULT (datetime('now', 'localtime'))
             );
 
             /* ── フレーズ間の関連（類義語・対義語・語根共通など） ── */
@@ -192,6 +206,14 @@ class PhraseDB:
             CREATE INDEX IF NOT EXISTS idx_video_links_b ON video_links(video_id_b);
         """)
         self.conn.commit()
+        # 冪等マイグレーション: phrases.tags カラムが存在しない場合に追加
+        try:
+            cols = [r[1] for r in self.conn.execute("PRAGMA table_info(phrases)").fetchall()]
+            if 'tags' not in cols:
+                self.conn.execute("ALTER TABLE phrases ADD COLUMN tags TEXT DEFAULT ''")
+                self.conn.commit()
+        except Exception:
+            pass
 
     def upsert_video(self, video_id: str, **kwargs) -> None:
         existing = self.conn.execute(
@@ -219,9 +241,13 @@ class PhraseDB:
         self.conn.execute("DELETE FROM phrases WHERE video_id = ?", (video_id,))
         for p in phrases:
             self.conn.execute(
-                "INSERT INTO phrases (video_id, phrase_en, phrase_ja, note, is_top) VALUES (?,?,?,?,?)",
-                (video_id, p.get("en", ""), p.get("ja", ""), p.get("note", ""), p.get("is_top", 0))
+                "INSERT INTO phrases (video_id, phrase_en, phrase_ja, note, is_top, explanation) VALUES (?,?,?,?,?,?)",
+                (video_id, p.get("en", ""), p.get("ja", ""), p.get("note", ""), p.get("is_top", 0), p.get("explanation", ""))
             )
+        self.conn.commit()
+
+    def update_phrase_explanation(self, phrase_id: int, explanation_json: str) -> None:
+        self.conn.execute("UPDATE phrases SET explanation = ? WHERE id = ?", (explanation_json, phrase_id))
         self.conn.commit()
 
     def add_phrase_links(self, links: list[dict]) -> int:
@@ -426,8 +452,60 @@ class PhraseDB:
         """, (limit,)).fetchall()
         return [dict(r) for r in rows]
 
+    def add_comment_explanation(self, comment_id: int, explanation_json: str) -> None:
+        self.conn.execute("UPDATE video_comments SET explanation = ? WHERE id = ?",
+                          (explanation_json, comment_id))
+        self.conn.commit()
+
     def close(self):
         self.conn.close()
+
+
+# ============================================================
+# 自動タグ付け
+# ============================================================
+def auto_tag_phrase(phrase_en: str, note: str, explanation_dict: dict) -> str:
+    """フレーズに自動タグを付与してカンマ区切りで返す"""
+    tags = []
+
+    # レベルタグ
+    level = (explanation_dict.get('level') or '').strip()
+    if level in ('初級', '中級', '上級'):
+        tags.append(level)
+
+    # 英検1級タグ
+    eiken_note = (explanation_dict.get('eiken_note') or '').strip()
+    if eiken_note:
+        tags.append('英検1級')
+
+    # 句動詞判定
+    phrasal_particles = r'\b(up|out|in|off|on|through|over|down|away|back|around|with|into|for|about|after|across)\b'
+    words = phrase_en.strip().split()
+    if len(words) >= 2 and re.search(phrasal_particles, words[-1].lower()):
+        tags.append('句動詞')
+    elif len(words) >= 3 and re.search(r'\b(the|a|an)\b', phrase_en.lower()):
+        tags.append('イディオム')
+    elif len(words) == 1:
+        tags.append('単語')
+    else:
+        if '句動詞' not in tags and 'イディオム' not in tags:
+            tags.append('表現')
+
+    # 分野キーワード判定
+    combined = (phrase_en + ' ' + note).lower()
+    domain_map = [
+        ('食・料理', r'\b(eat|food|cook|recipe|meal|dish|restaurant|taste|flavor|cuisine|ingredient)\b'),
+        ('ビジネス', r'\b(business|work|office|meeting|deal|profit|client|market|strategy|management)\b'),
+        ('旅行', r'\b(travel|trip|journey|hotel|airport|flight|destination|tour|visit|vacation)\b'),
+        ('感情', r'\b(feel|emotion|happy|sad|angry|excited|afraid|love|hate|worry|stress)\b'),
+        ('日常会話', r'\b(say|talk|speak|chat|tell|ask|reply|conversation|daily|everyday)\b'),
+    ]
+    for domain, pattern in domain_map:
+        if re.search(pattern, combined):
+            tags.append(domain)
+            break
+
+    return ','.join(dict.fromkeys(tags))  # 重複除去して順序保持
 
 
 # ============================================================
@@ -612,7 +690,8 @@ def download_subtitles(url: str, lang: str = "en", outdir: str | None = None,
     video_title = info.get("title", "subtitle")
     safe_title = make_safe_filename(video_title)[:60]
 
-    subtitles = {}
+    subtitles = {}       # raw SRT → DB保存用（タイムスタンプ付き）
+    formatted_subs = {}  # 整形テキスト → LLMプロンプト・MD/HTML保存用
     for f in os.listdir(tmpdir):
         if f.endswith(".srt") or f.endswith(".vtt"):
             fp = os.path.join(tmpdir, f)
@@ -620,20 +699,31 @@ def download_subtitles(url: str, lang: str = "en", outdir: str | None = None,
             lc = parts[-2] if len(parts) >= 3 else "unknown"
             with open(fp, "r", encoding="utf-8", errors="replace") as fh:
                 raw = fh.read()
+            # .srt を outdir に保存（タイムスタンプ保持）
+            srt_filename = f"{safe_title}.{lc}.srt"
+            srt_path = os.path.join(outdir, srt_filename)
+            with open(srt_path, "w", encoding="utf-8") as sf:
+                sf.write(raw)
             clean = srt_to_text(raw)
             if clean.strip():
+                # DB には raw SRT（タイムスタンプ付き）を保存
+                subtitles[lc] = raw
                 # LLMで整形（APIキーがある場合）
                 formatted = format_subtitle_with_llm(clean, lc, video_title, model, api_key) if api_key else clean
-                subtitles[lc] = formatted
+                formatted_subs[lc] = formatted
                 # .md 保存
                 md_filename = f"{safe_title}.{lc}.md"
                 md_path = os.path.join(outdir, md_filename)
+                lang_label = {"en": "🇬🇧 English", "ja": "🇯🇵 日本語"}.get(lc, lc.upper())
                 with open(md_path, "w", encoding="utf-8") as mf:
-                    mf.write(f"# {video_title}\n\n")
-                    mf.write(f"**言語**: {lc}  \n")
-                    mf.write(f"**文字数**: {len(formatted)}  \n\n")
+                    mf.write(f"# 📄 {video_title}\n\n")
+                    mf.write(f"> {lang_label}　｜　文字数: {len(formatted):,}　｜　{datetime.now().strftime('%Y-%m-%d')}\n\n")
                     mf.write("---\n\n")
-                    mf.write(formatted + "\n")
+                    # 段落ごとに空行を入れて読みやすく
+                    for para in formatted.split("\n\n"):
+                        para = para.strip()
+                        if para:
+                            mf.write(para + "\n\n")
                 # .html 保存
                 html_filename = f"{safe_title}.{lc}.html"
                 html_path = os.path.join(outdir, html_filename)
@@ -658,8 +748,10 @@ def download_subtitles(url: str, lang: str = "en", outdir: str | None = None,
 
     if not subtitles:
         print("    ⚠ URL直接取得を試みます...")
-        subtitles = extract_subs_from_info(info, lang_list)
-    return subtitles
+        fallback = extract_subs_from_info(info, lang_list)
+        subtitles = fallback
+        formatted_subs = fallback
+    return subtitles, formatted_subs
 
 
 def extract_subs_from_info(info, lang_list):
@@ -863,6 +955,91 @@ LINK: フレーズA ||| フレーズB ||| 関連タイプ ||| 補足メモ
 
 
 # ============================================================
+# MD整形ヘルパー
+# ============================================================
+
+def _flush_phrase_table(rows: list[tuple]) -> list[str]:
+    """フレーズ行リストを Markdown テーブルに変換"""
+    lines = [
+        "| フレーズ（英語） | 日本語訳 | 説明・ニュアンス |",
+        "|:---|:---|:---|",
+    ]
+    for en, ja, note in rows:
+        en   = en.replace("|", "｜").strip()
+        ja   = ja.replace("|", "｜").strip()
+        note = note.replace("|", "｜").strip()
+        lines.append(f"| **{en}** | {ja} | {note} |")
+    lines.append("")
+    return lines
+
+
+def _llm_to_nice_md(llm_result: str) -> str:
+    """LLM生テキストを見やすい Markdown に整形"""
+    TASK_HEADERS = {
+        r"タスク1": "## 📝 文脈・シーン概要",
+        r"タスク2": "## 📚 フレーズ一覧",
+        r"タスク3": "## ⭐ 特に覚えるべきフレーズ",
+        r"タスク4": "## 🔄 過去学習との関連",
+    }
+
+    result: list[str] = []
+    table_rows: list[tuple] = []
+    in_table = False
+
+    def flush_table():
+        nonlocal in_table, table_rows
+        if table_rows:
+            result.extend(_flush_phrase_table(table_rows))
+        table_rows = []
+        in_table = False
+
+    for raw_line in llm_result.split("\n"):
+        stripped = raw_line.strip()
+
+        # TOPICS / LINK 行は除外
+        if re.match(r"^(TOPICS?|LINK)\s*[:：]", stripped, re.IGNORECASE):
+            continue
+
+        # タスクヘッダー変換
+        replaced = False
+        for pattern, replacement in TASK_HEADERS.items():
+            if re.search(pattern, stripped):
+                flush_table()
+                result.append(replacement)
+                replaced = True
+                break
+        if replaced:
+            continue
+
+        # フレーズ行（- EN | JA または - EN | JA | note）
+        m = re.match(r"^[-*]\s*(.+?)\s*\|\s*(.+?)(?:\s*\|\s*(.+))?$", stripped)
+        if m and "|" in stripped:
+            table_rows.append((m.group(1), m.group(2), m.group(3) or ""))
+            in_table = True
+            continue
+
+        # テーブルモード中に非テーブル行 → フラッシュ
+        if in_table:
+            flush_table()
+
+        result.append(raw_line)
+
+    flush_table()
+
+    # 連続空行を 1 行に圧縮
+    final: list[str] = []
+    prev_blank = False
+    for line in result:
+        is_blank = not line.strip()
+        if is_blank and prev_blank:
+            continue
+        final.append(line)
+        prev_blank = is_blank
+
+    return "\n".join(final)
+
+
+# ============================================================
 # MD保存（リッチ版）
 # ============================================================
 def save_rich_md(llm_result: str, title: str, url: str, video_info: dict,
@@ -872,75 +1049,468 @@ def save_rich_md(llm_result: str, title: str, url: str, video_info: dict,
     safe_name = make_safe_filename(title)[:50]
     filepath = os.path.join(outdir, f"{safe_name}_phrases.md")
 
-    channel = video_info.get("channel", "")
+    channel  = video_info.get("channel", "")
     duration = video_info.get("duration", 0)
-    dur_str = f"{duration//60}分{duration%60}秒" if duration else "不明"
+    dur_str  = f"{duration // 60}分{duration % 60}秒" if duration else "不明"
+    now_str  = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    type_labels = {
+        "synonym": "類義語", "antonym": "対義語", "root": "同語根",
+        "broader": "上位概念", "narrower": "下位概念",
+        "collocate": "共起", "variant": "変形",
+    }
 
     with open(filepath, "w", encoding="utf-8") as f:
-        f.write(f"# {title}\n\n")
-        f.write(f"## 動画情報\n")
-        f.write(f"| 項目 | 内容 |\n|---|---|\n")
-        f.write(f"| URL | {url} |\n")
-        f.write(f"| チャンネル | {channel} |\n")
-        f.write(f"| 動画長 | {dur_str} |\n")
-        f.write(f"| 分析モデル | {model} |\n")
-        f.write(f"| 分析日時 | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} |\n")
-        if topics:
-            f.write(f"| トピック | {', '.join(topics)} |\n")
-        f.write("\n")
+        # ── ヘッダー ──────────────────────────────────────
+        f.write(f"# 🎬 {title}\n\n")
 
-        if related_videos:
-            f.write(f"## 🔗 関連する過去の学習動画\n")
-            for rv in related_videos:
-                f.write(f"- [{rv['title']}]({rv['url']}) ({rv.get('date','')})\n")
-            f.write("\n")
-
+        meta_parts = []
+        if channel:  meta_parts.append(f"📺 {channel}")
+        meta_parts.append(f"⏱ {dur_str}")
+        meta_parts.append(f"📅 {now_str}")
+        f.write("> " + "　｜　".join(meta_parts) + "\n\n")
+        f.write(f"🔗 [動画を開く]({url})　　🤖 `{model}`\n\n")
         f.write("---\n\n")
 
-        for line in llm_result.split("\n"):
-            stripped = line.strip()
-            if stripped.startswith("TOPICS:") or stripped.startswith("LINK:"):
-                continue
-            f.write(line + "\n")
+        # ── トピック ─────────────────────────────────────
+        if topics:
+            tags = "　".join(f"`{t}`" for t in topics)
+            f.write(f"**🏷️ トピック**: {tags}\n\n")
+            f.write("---\n\n")
 
+        # ── 関連する過去動画 ──────────────────────────────
+        if related_videos:
+            f.write("## 🔗 関連する過去の学習動画\n\n")
+            for rv in related_videos:
+                date_str = f" _(学習日: {rv.get('date','')})" if rv.get("date") else ""
+                f.write(f"- [{rv['title']}]({rv['url']}){date_str}\n")
+            f.write("\n---\n\n")
+
+        # ── LLM本文（整形済み）────────────────────────────
+        f.write(_llm_to_nice_md(llm_result))
+        f.write("\n\n")
+
+        # ── フレーズ関連マップ ────────────────────────────
         if phrase_links:
-            f.write(f"\n---\n\n## 🔗 フレーズ関連マップ\n\n")
-            type_labels = {
-                "synonym": "類義語", "antonym": "対義語", "root": "同語根",
-                "broader": "上位概念", "narrower": "下位概念",
-                "collocate": "共起", "variant": "変形",
-            }
-            by_type = {}
+            f.write("---\n\n## 🕸️ フレーズ関連マップ\n\n")
+            by_type: dict[str, list] = {}
             for lk in phrase_links:
-                lt = lk.get("type", "synonym")
-                by_type.setdefault(lt, []).append(lk)
-
+                by_type.setdefault(lk.get("type", "synonym"), []).append(lk)
             for lt, items in by_type.items():
                 label = type_labels.get(lt, lt)
-                f.write(f"### {label}\n")
+                f.write(f"### {label}\n\n")
                 for lk in items:
-                    note = f" → {lk['note']}" if lk.get("note") else ""
+                    note = f"　_({lk['note']})_" if lk.get("note") else ""
                     f.write(f"- **{lk['source']}** → **{lk['phrase']}**{note}\n")
                 f.write("\n")
 
-        f.write("\n")
+        # ── フッター ──────────────────────────────────────
+        f.write(f"---\n\n_🤖 自動生成: {model}　｜　{now_str}_\n")
 
+    return filepath
+
+
+# ============================================================
+# 英検1級レベル解析（文ごとの英和解説 + 語彙抽出）
+# ============================================================
+def build_eiken_prompt(text: str, title: str) -> str:
+    """英検1級レベルで文ごとの解説 + 語彙抽出プロンプトを生成"""
+    # 長すぎる場合は先頭3000文字に絞る
+    truncated = text[:3000] if len(text) > 3000 else text
+
+    return f"""以下はYouTube動画または英語学習記事「{title}」のテキストです。
+英検1級レベルの英語学習者向けに、以下の2つのタスクを実行してください。
+
+---テキスト---
+{truncated}
+---
+
+## タスク1: 文ごとの英和解説（最大20文）
+テキストから英文を1文ずつ取り出し、以下の形式で出力してください。
+重複文・短すぎる断片は除外してください。
+
+[SENTENCE]
+EN: （英文をそのまま1文）
+JA: （自然な日本語訳）
+EXP: （英検1級レベルの解説：文法構造・語法・表現のニュアンス・イディオムの説明など）
+[/SENTENCE]
+
+## タスク2: 英検1級レベル語彙リスト
+テキストに登場する英検1級レベルの語彙・イディオム・コロケーションを10〜20個抽出し、以下の形式で出力してください。
+
+[VOCAB]
+WORD: （単語またはフレーズ）
+POS: （品詞：名詞/動詞/形容詞/副詞/イディオム/コロケーションのいずれか）
+MEANING: （日本語の意味・訳語）
+EXAMPLE: （テキスト内の用例またはわかりやすい別例文）
+NOTE: （語源・ニュアンス・使用上の注意・類義語など）
+[/VOCAB]
+
+出力は必ず上記の[SENTENCE]〜[/SENTENCE]と[VOCAB]〜[/VOCAB]形式を守ってください。
+日本語で出力してください（ENとEXAMPLE行の英文部分を除く）。
+"""
+
+
+def parse_eiken_result(eiken_text: str) -> dict:
+    """LLM出力から文解説リストと語彙リストをパース"""
+    sentences = []
+    vocab_list = []
+
+    # [SENTENCE] ブロックを抽出
+    sent_blocks = re.findall(r"\[SENTENCE\](.*?)\[/SENTENCE\]", eiken_text, re.DOTALL)
+    for block in sent_blocks:
+        entry = {}
+        m_en = re.search(r"^EN:\s*(.+)", block, re.MULTILINE)
+        m_ja = re.search(r"^JA:\s*(.+)", block, re.MULTILINE)
+        m_exp = re.search(r"^EXP:\s*(.+(?:\n(?!(?:EN:|JA:|EXP:|\[)).+)*)", block, re.MULTILINE)
+        if m_en:
+            entry["en"] = m_en.group(1).strip()
+        if m_ja:
+            entry["ja"] = m_ja.group(1).strip()
+        if m_exp:
+            entry["exp"] = m_exp.group(1).strip().replace("\n", " ")
+        if entry.get("en"):
+            sentences.append(entry)
+
+    # [VOCAB] ブロックを抽出
+    vocab_blocks = re.findall(r"\[VOCAB\](.*?)\[/VOCAB\]", eiken_text, re.DOTALL)
+    for block in vocab_blocks:
+        entry = {}
+        m_word = re.search(r"^WORD:\s*(.+)", block, re.MULTILINE)
+        m_pos = re.search(r"^POS:\s*(.+)", block, re.MULTILINE)
+        m_meaning = re.search(r"^MEANING:\s*(.+)", block, re.MULTILINE)
+        m_example = re.search(r"^EXAMPLE:\s*(.+)", block, re.MULTILINE)
+        m_note = re.search(r"^NOTE:\s*(.+(?:\n(?!(?:WORD:|POS:|MEANING:|EXAMPLE:|NOTE:|\[)).+)*)", block, re.MULTILINE)
+        if m_word:
+            entry["word"] = m_word.group(1).strip()
+        if m_pos:
+            entry["pos"] = m_pos.group(1).strip()
+        if m_meaning:
+            entry["meaning"] = m_meaning.group(1).strip()
+        if m_example:
+            entry["example"] = m_example.group(1).strip()
+        if m_note:
+            entry["note"] = m_note.group(1).strip().replace("\n", " ")
+        if entry.get("word"):
+            vocab_list.append(entry)
+
+    return {"sentences": sentences, "vocab": vocab_list}
+
+
+def save_eiken_html(eiken_result: dict, title: str, url: str, outdir: str, model: str) -> str:
+    """英検1級解析結果を美しいHTMLで保存"""
+    os.makedirs(outdir, exist_ok=True)
+    safe_name = make_safe_filename(title)[:50]
+    filepath = os.path.join(outdir, f"{safe_name}_eiken1.html")
+
+    sentences = eiken_result.get("sentences", [])
+    vocab_list = eiken_result.get("vocab", [])
+
+    # 文解説カードのHTML生成
+    sentence_cards_html = ""
+    for i, s in enumerate(sentences, 1):
+        en = s.get("en", "").replace("<", "&lt;").replace(">", "&gt;")
+        ja = s.get("ja", "").replace("<", "&lt;").replace(">", "&gt;")
+        exp = s.get("exp", "").replace("<", "&lt;").replace(">", "&gt;")
+        sentence_cards_html += f"""
+        <div class="sentence-card">
+          <div class="sentence-num">#{i}</div>
+          <div class="sentence-en">{en}</div>
+          {"<div class='sentence-ja'><span class='label-ja'>和訳</span>" + ja + "</div>" if ja else ""}
+          {"<div class='sentence-exp'><span class='label-exp'>解説</span>" + exp + "</div>" if exp else ""}
+        </div>"""
+
+    # 語彙カードのHTML生成
+    pos_colors = {
+        "名詞": ("#1565c0", "#e3f2fd"),
+        "動詞": ("#2e7d32", "#e8f5e9"),
+        "形容詞": ("#6a1b9a", "#f3e5f5"),
+        "副詞": ("#00695c", "#e0f2f1"),
+        "イディオム": ("#bf360c", "#fbe9e7"),
+        "コロケーション": ("#e65100", "#fff3e0"),
+    }
+    default_pos_colors = ("#37474f", "#eceff1")
+
+    vocab_cards_html = ""
+    for v in vocab_list:
+        word = v.get("word", "").replace("<", "&lt;").replace(">", "&gt;")
+        pos = v.get("pos", "")
+        meaning = v.get("meaning", "").replace("<", "&lt;").replace(">", "&gt;")
+        example = v.get("example", "").replace("<", "&lt;").replace(">", "&gt;")
+        note = v.get("note", "").replace("<", "&lt;").replace(">", "&gt;")
+        fc, bc = pos_colors.get(pos, default_pos_colors)
+        vocab_cards_html += f"""
+        <div class="vocab-card" style="border-top-color:{fc};">
+          <div class="vocab-word">{word}</div>
+          {"<span class='vocab-pos' style='color:" + fc + ";background:" + bc + ";'>" + pos + "</span>" if pos else ""}
+          {"<div class='vocab-meaning'>" + meaning + "</div>" if meaning else ""}
+          {"<div class='vocab-example'>例: " + example + "</div>" if example else ""}
+          {"<div class='vocab-note'>&#9654; " + note + "</div>" if note else ""}
+        </div>"""
+
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    url_display = url.replace("<", "&lt;").replace(">", "&gt;")
+    title_display = title.replace("<", "&lt;").replace(">", "&gt;")
+
+    html = f"""<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>英検1級解析: {title_display}</title>
+<style>
+  :root {{
+    --blue: #1a3a6b;
+    --light-blue: #e8f0fe;
+    --green: #1b5e20;
+    --light-green: #e8f5e9;
+    --orange: #e65100;
+    --light-orange: #fff3e0;
+    --gray: #546e7a;
+    --light-gray: #f5f7fa;
+    --accent: #c62828;
+    --card-shadow: 0 2px 8px rgba(0,0,0,0.09);
+  }}
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{
+    font-family: 'Segoe UI', 'Noto Sans JP', 'Hiragino Kaku Gothic ProN', sans-serif;
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 24px 20px 60px;
+    background: #f0f4f8;
+    color: #263238;
+    line-height: 1.7;
+  }}
+  .page-header {{
+    background: linear-gradient(135deg, var(--blue) 0%, #2962ff 100%);
+    color: white;
+    padding: 28px 32px;
+    border-radius: 12px;
+    margin-bottom: 24px;
+    box-shadow: 0 4px 16px rgba(26,58,107,0.25);
+  }}
+  .page-header h1 {{
+    font-size: 1.45em;
+    font-weight: 700;
+    margin-bottom: 10px;
+    line-height: 1.4;
+  }}
+  .meta-info {{
+    font-size: 0.82em;
+    opacity: 0.88;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+  }}
+  .meta-info a {{ color: #90caf9; }}
+  .section-header {{
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 32px 0 16px;
+  }}
+  .section-header h2 {{
+    font-size: 1.2em;
+    color: var(--blue);
+    font-weight: 700;
+  }}
+  .section-header .count-badge {{
+    background: var(--light-blue);
+    color: var(--blue);
+    font-size: 0.78em;
+    font-weight: 600;
+    padding: 3px 10px;
+    border-radius: 20px;
+  }}
+  .section-divider {{
+    height: 3px;
+    background: linear-gradient(90deg, var(--blue), transparent);
+    border-radius: 2px;
+    margin-bottom: 20px;
+  }}
+  /* 文解説カード */
+  .sentence-card {{
+    background: white;
+    border-radius: 10px;
+    box-shadow: var(--card-shadow);
+    margin-bottom: 14px;
+    padding: 16px 20px;
+    border-left: 5px solid var(--blue);
+    transition: box-shadow .2s;
+  }}
+  .sentence-card:hover {{ box-shadow: 0 4px 16px rgba(0,0,0,0.13); }}
+  .sentence-num {{
+    font-size: 0.72em;
+    font-weight: 700;
+    color: var(--blue);
+    opacity: 0.5;
+    margin-bottom: 4px;
+    letter-spacing: .05em;
+  }}
+  .sentence-en {{
+    font-size: 1.08em;
+    color: #1a237e;
+    font-weight: 600;
+    line-height: 1.65;
+    margin-bottom: 9px;
+  }}
+  .sentence-ja {{
+    font-size: 0.93em;
+    color: var(--gray);
+    background: var(--light-gray);
+    padding: 7px 12px;
+    border-radius: 5px;
+    margin-bottom: 9px;
+  }}
+  .sentence-exp {{
+    font-size: 0.86em;
+    color: var(--green);
+    background: var(--light-green);
+    padding: 9px 13px;
+    border-radius: 5px;
+    border-left: 3px solid #4caf50;
+    line-height: 1.65;
+  }}
+  .label-ja, .label-exp {{
+    display: inline-block;
+    font-size: 0.72em;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 3px;
+    margin-right: 6px;
+    vertical-align: middle;
+  }}
+  .label-ja {{ background: #b0bec5; color: white; }}
+  .label-exp {{ background: #66bb6a; color: white; }}
+  /* 語彙カード */
+  .vocab-section {{ margin-top: 40px; }}
+  .vocab-grid {{
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+    gap: 13px;
+  }}
+  .vocab-card {{
+    background: white;
+    border-radius: 10px;
+    box-shadow: var(--card-shadow);
+    padding: 15px 17px;
+    border-top: 4px solid var(--orange);
+    transition: transform .15s, box-shadow .2s;
+  }}
+  .vocab-card:hover {{ transform: translateY(-2px); box-shadow: 0 6px 18px rgba(0,0,0,0.12); }}
+  .vocab-word {{
+    font-size: 1.18em;
+    font-weight: 700;
+    color: var(--orange);
+    margin-bottom: 5px;
+    letter-spacing: .02em;
+  }}
+  .vocab-pos {{
+    display: inline-block;
+    font-size: 0.73em;
+    font-weight: 600;
+    padding: 2px 9px;
+    border-radius: 12px;
+    margin-bottom: 8px;
+  }}
+  .vocab-meaning {{
+    font-size: 0.92em;
+    color: #263238;
+    font-weight: 500;
+    margin: 5px 0 7px;
+  }}
+  .vocab-example {{
+    font-size: 0.82em;
+    color: var(--gray);
+    font-style: italic;
+    background: var(--light-gray);
+    padding: 6px 9px;
+    border-radius: 4px;
+    margin-top: 5px;
+    line-height: 1.5;
+  }}
+  .vocab-note {{
+    font-size: 0.79em;
+    color: var(--accent);
+    margin-top: 7px;
+    line-height: 1.5;
+  }}
+  .empty-msg {{
+    text-align: center;
+    color: var(--gray);
+    font-size: 0.9em;
+    padding: 30px;
+    background: white;
+    border-radius: 8px;
+  }}
+</style>
+</head>
+<body>
+<div class="page-header">
+  <h1>&#127891; 英検1級解析: {title_display}</h1>
+  <div class="meta-info">
+    <span>&#128279; <a href="{url_display}" target="_blank">{url_display[:70]}{"..." if len(url_display) > 70 else ""}</a></span>
+    <span>&#128197; {now_str}</span>
+    <span>&#129302; {model}</span>
+  </div>
+</div>
+
+<div class="section-header">
+  <h2>&#128214; 文ごとの英和解説</h2>
+  <span class="count-badge">{len(sentences)}文</span>
+</div>
+<div class="section-divider"></div>
+{"".join([sentence_cards_html]) if sentences else '<div class="empty-msg">解析データがありません</div>'}
+
+<div class="vocab-section">
+  <div class="section-header">
+    <h2>&#128218; 英検1級レベル語彙</h2>
+    <span class="count-badge">{len(vocab_list)}語</span>
+  </div>
+  <div class="section-divider"></div>
+  {"<div class='vocab-grid'>" + vocab_cards_html + "</div>" if vocab_list else '<div class="empty-msg">語彙データがありません</div>'}
+</div>
+
+</body>
+</html>
+"""
+
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(html)
     return filepath
 
 
 def save_summary(all_results: list[dict], outdir: str) -> str:
     os.makedirs(outdir, exist_ok=True)
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    ts       = datetime.now().strftime("%Y%m%d_%H%M%S")
+    now_str  = datetime.now().strftime("%Y-%m-%d %H:%M")
     filepath = os.path.join(outdir, f"phrases_summary_{ts}.md")
+
     with open(filepath, "w", encoding="utf-8") as f:
-        f.write(f"# 英語フレーズ抽出サマリー\n")
-        f.write(f"生成日時: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-        f.write(f"処理動画数: {len(all_results)}\n\n---\n\n")
+        # ── ヘッダー ──────────────────────────────────────
+        f.write("# 📊 英語学習サマリー\n\n")
+        f.write(f"> 📅 生成日時: **{now_str}**　｜　🎬 処理動画数: **{len(all_results)} 本**\n\n")
+        f.write("---\n\n")
+
+        # ── 動画インデックス ──────────────────────────────
+        if len(all_results) > 1:
+            f.write("## 📋 動画一覧\n\n")
+            for i, item in enumerate(all_results, 1):
+                f.write(f"{i}. [{item['title']}]({item['url']})\n")
+            f.write("\n---\n\n")
+
+        # ── 各動画のフレーズ ──────────────────────────────
         for i, item in enumerate(all_results, 1):
-            f.write(f"## {i}. [{item['title']}]({item['url']})\n\n")
+            f.write(f"## {i}. {item['title']}\n\n")
+            f.write(f"🔗 [{item['url']}]({item['url']})\n\n")
+
             if item.get("result"):
-                f.write(item["result"])
+                f.write(_llm_to_nice_md(item["result"]))
+
             f.write("\n\n---\n\n")
+
+        f.write(f"_🤖 自動生成: {now_str}_\n")
+
     return filepath
 
 
@@ -1324,12 +1894,173 @@ def process_web_article(url: str, model: str, api_key: str, outdir: str,
         result_data["md_path"] = md_path
         db.upsert_video(article_id, md_path=md_path)
         print(f"  📄 MD保存: {md_path}")
+
+        # 英検1級HTML生成
+        if article["body"] and api_key:
+            print(f"  📝 英検1級解析中 (LLM)...")
+            eiken_prompt = build_eiken_prompt(article["body"], title)
+            eiken_raw = call_openrouter(eiken_prompt, model, api_key)
+            if eiken_raw:
+                eiken_result = parse_eiken_result(eiken_raw)
+                eiken_path = save_eiken_html(eiken_result, title, url, outdir, model)
+                print(f"  🎓 英検1級HTML: {eiken_path}")
     else:
         print(f"  ✗ LLM分析失敗")
 
     if not result_data["result"]:
         return None
     return result_data
+
+
+# ============================================================
+# フレーズ解説プリフェッチ
+# ============================================================
+def _explain_phrase_openrouter(phrase_en: str, note: str, model: str, api_key: str) -> dict:
+    """OpenRouter で1フレーズの解説を取得して dict で返す"""
+    import requests as _req
+    prompt = f"""英検1級・上級英語学習者向けに、以下の英語フレーズを解説してください。
+言語学的知見（語源学、認知言語学、音象徴など）を活用して、深く・記憶に残る解説を作成してください。
+
+フレーズ: {phrase_en}
+{f'文脈メモ: {note}' if note else ''}
+
+以下のJSON形式のみで返答してください（他のテキスト不要）:
+{{
+  "meaning": "意味・説明（日本語・詳しく）",
+  "usage": "使い方・ニュアンス・語法（日本語）",
+  "example": "英検1級レベルの例文（英語）",
+  "example_ja": "例文の日本語訳",
+  "etymology": "語源・成り立ち（ラテン語/ギリシャ語/古英語の語根・接頭辞・接尾辞の分析。語根が他の単語にも現れる場合は例示）",
+  "linguistics_note": "言語学的考察（音象徴・認知言語学的メタファー・形態素分析・イメージスキーマなど、記憶の助けになる観点）",
+  "story": "覚え方ストーリー（日本語・情景が浮かぶ具体的なエピソード。語源や音のイメージと結びつけると効果的）",
+  "mnemonic": "ゴロ合わせや記憶術（日本語・音・形・意味を結びつける）",
+  "related": ["英検1級・TOEFL・GRE レベルの類語・対義語・派生語 最大4つ（基本語は避け、高度な語彙のみ）"],
+  "eiken_note": "英検1級での出題傾向・注意点（あれば）",
+  "level": "初級/中級/上級"
+}}"""
+    try:
+        resp = _req.post(
+            'https://openrouter.ai/api/v1/chat/completions',
+            headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},
+            json={'model': model, 'messages': [{'role': 'user', 'content': prompt}],
+                  'response_format': {'type': 'json_object'}, 'temperature': 0.3},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        content = resp.json()['choices'][0]['message']['content']
+        return json.loads(content)
+    except Exception:
+        return {}
+
+
+def prefetch_phrase_explanations(db: PhraseDB, video_id: str, phrases: list[dict],
+                                  model: str, api_key: str) -> None:
+    """フレーズ一覧の解説をOpenRouterで一括取得してDBに保存"""
+    rows = db.conn.execute(
+        "SELECT id, phrase_en, note FROM phrases WHERE video_id = ? ORDER BY id",
+        (video_id,)
+    ).fetchall()
+    total = len(rows)
+    print(f"  🤖 フレーズ解説プリフェッチ: {total}件")
+    for i, row in enumerate(rows, 1):
+        pid, pen, note = row["id"], row["phrase_en"], row["note"] or ""
+        # markdown記法除去
+        clean_en = pen.replace("**", "").replace("*", "").replace("`", "").strip()
+        if not clean_en:
+            continue
+        print(f"    [{i}/{total}] {clean_en[:40]}", end="", flush=True)
+        expl = _explain_phrase_openrouter(clean_en, note, model, api_key)
+        if expl:
+            tags = auto_tag_phrase(clean_en, note, expl)
+            db.conn.execute(
+                "UPDATE phrases SET explanation=?, tags=? WHERE id=?",
+                (json.dumps(expl, ensure_ascii=False), tags, pid)
+            )
+            db.conn.commit()
+            print(f" ✓")
+        else:
+            print(f" ✗")
+
+
+# ============================================================
+# YouTubeコメント取得・LLMフィルタリング
+# ============================================================
+def fetch_video_comments(url: str, video_id: str, model: str, api_key: str, db: 'PhraseDB') -> int:
+    """yt-dlpでコメント取得→LLMで英検1級向けフィルタリング→DB保存"""
+    print("  💬 コメント取得中...")
+    try:
+        import yt_dlp as ydl_mod
+        opts = {
+            'quiet': True, 'no_warnings': True,
+            'getcomments': True,
+            'extractor_args': {'youtube': {'comment_sort': ['top'], 'max_comments': ['30,5']}},
+            'skip_download': True,
+        }
+        with ydl_mod.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+        comments = info.get('comments') or []
+    except Exception as e:
+        print(f"  ⚠ コメント取得失敗: {e}")
+        return 0
+
+    if not comments:
+        print("  ⚠ コメントなし")
+        return 0
+
+    # いいね数でソート上位30件
+    comments_sorted = sorted(comments, key=lambda c: c.get('like_count') or 0, reverse=True)[:30]
+    comment_texts = '\n'.join(
+        f"[{i+1}] ({c.get('like_count',0)}likes) {(c.get('text','')[:200])}"
+        for i, c in enumerate(comments_sorted)
+    )
+
+    # LLMで英検1級向けフィルタリング
+    selected_indices = set(range(len(comments_sorted)))  # フォールバック: 全部
+    if api_key:
+        prompt = f"""以下のYouTubeコメントから英検1級レベルの英語学習に役立つものを選んでください。
+選定基準: 高度な英語表現・イディオム・語彙・文法が含まれ、学習者に有益なもの。日本語のみ・単純すぎる内容は除外。
+
+{comment_texts}
+
+JSON形式のみで返答: {{"selected": [1,3,5,...]}} (選んだ番号のリスト)"""
+        try:
+            import requests as _req
+            resp = _req.post(
+                'https://openrouter.ai/api/v1/chat/completions',
+                headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},
+                json={
+                    'model': model,
+                    'messages': [{'role': 'user', 'content': prompt}],
+                    'response_format': {'type': 'json_object'},
+                    'temperature': 0.3,
+                },
+                timeout=30,
+            )
+            if resp.status_code == 200:
+                content = resp.json()['choices'][0]['message']['content']
+                data = json.loads(content)
+                nums = data.get('selected', [])
+                if nums:
+                    selected_indices = {n-1 for n in nums if 1 <= n <= len(comments_sorted)}
+        except Exception:
+            pass
+
+    # DB保存
+    db.conn.execute("DELETE FROM video_comments WHERE video_id = ?", (video_id,))
+    count = 0
+    for i in sorted(selected_indices):
+        c = comments_sorted[i]
+        text = (c.get('text') or '').strip()
+        if not text:
+            continue
+        db.conn.execute(
+            "INSERT INTO video_comments (video_id, author, text, likes) VALUES (?,?,?,?)",
+            (video_id, c.get('author', ''), text[:500], c.get('like_count', 0) or 0)
+        )
+        count += 1
+    db.conn.commit()
+    print(f"  💬 コメント {count}件保存")
+    return count
 
 
 # ============================================================
@@ -1360,7 +2091,8 @@ def process_single_video(url: str, video_info: dict, mode: str, model: str,
     # 字幕＋LLM
     if mode in ("sub", "both"):
         # 【改造】字幕SRTファイルも日付フォルダへ保存
-        subtitles = download_subtitles(url, lang=lang, outdir=outdir, model=model, api_key=api_key)
+        # subtitles = raw SRT（DB保存用）, formatted_subs = 整形テキスト（LLM用）
+        subtitles, formatted_subs = download_subtitles(url, lang=lang, outdir=outdir, model=model, api_key=api_key)
 
         if subtitles:
             db.upsert_video(video_id,
@@ -1371,14 +2103,14 @@ def process_single_video(url: str, video_info: dict, mode: str, model: str,
                             subtitle_en=subtitles.get("en", ""),
                             subtitle_ja=subtitles.get("ja", ""))
 
-            sub_text = subtitles.get("en", "") + " " + subtitles.get("ja", "")
+            sub_text = formatted_subs.get("en", "") + " " + formatted_subs.get("ja", "")
             related = db.find_related_videos(sub_text, video_id)
             past_top = db.get_past_top_phrases()
 
             if related:
                 print(f"  🔗 関連する過去動画: {len(related)}件")
 
-            prompt = build_prompt(subtitles, title, url, video_info, top_n, related, past_top)
+            prompt = build_prompt(formatted_subs, title, url, video_info, top_n, related, past_top)
             llm_result = call_openrouter(prompt, model, api_key)
 
             if llm_result:
@@ -1389,6 +2121,8 @@ def process_single_video(url: str, video_info: dict, mode: str, model: str,
                 if phrases:
                     db.add_phrases(video_id, phrases)
                     print(f"  📚 {len(phrases)}フレーズをDBに登録")
+                    if api_key:
+                        prefetch_phrase_explanations(db, video_id, phrases, model, api_key)
 
                 topics = parse_topics_from_llm(llm_result)
                 if topics:
@@ -1411,6 +2145,21 @@ def process_single_video(url: str, video_info: dict, mode: str, model: str,
                 db.upsert_video(video_id, md_path=md_path,
                                 video_path=result_data.get("video_path","") or "")
                 print(f"  📄 MD保存: {md_path}")
+
+                # 英検1級HTML生成
+                en_text = subtitles.get("en", "")
+                if en_text and api_key:
+                    print(f"  📝 英検1級解析中 (LLM)...")
+                    eiken_prompt = build_eiken_prompt(en_text, title)
+                    eiken_raw = call_openrouter(eiken_prompt, model, api_key)
+                    if eiken_raw:
+                        eiken_result = parse_eiken_result(eiken_raw)
+                        eiken_path = save_eiken_html(eiken_result, title, url, outdir, model)
+                        print(f"  🎓 英検1級HTML: {eiken_path}")
+
+                # コメント取得
+                if video_id and api_key:
+                    fetch_video_comments(url, video_id, model, api_key, db)
             else:
                 print(f"  ✗ LLM分析失敗")
         else:
@@ -1440,7 +2189,7 @@ def main():
 
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--lang", default="en")
-    parser.add_argument("--outdir", default="/mnt/c/00data/dropbox/Dropbox/02_audio",
+    parser.add_argument("--outdir", default=os.path.dirname(os.path.abspath(__file__)),
                         help="出力先ルートディレクトリ（この下にYYYYMMDDフォルダが作成される）")
     parser.add_argument("--top", type=int, default=3)
     parser.add_argument("--no-playlist", action="store_true")
@@ -1591,30 +2340,61 @@ def main():
     print(f"\n📋 処理対象: {total}件")
 
     all_results = []
-    idx = 0
+    _print_lock = threading.Lock()
 
-    for i, v in enumerate(videos, 1):
-        idx += 1
-        print(f"\n[{idx}/{total}]", end="")
-        result = process_single_video(
-            url=v["url"], video_info=v, mode=args.mode, model=args.model,
-            api_key=api_key, lang=args.lang,
-            outdir=dated_outdir,  # 【改造】日付フォルダを渡す
-            top_n=args.top, db=db,
-        )
-        if result:
-            all_results.append(result)
+    def _process_video(idx_v):
+        idx, v = idx_v
+        with _print_lock:
+            print(f"\n[{idx}/{total}] 🎬 {v.get('title','')[:50]}")
+        # スレッドごとに独立したDB接続を使用
+        _db = PhraseDB(db_path)
+        try:
+            result = process_single_video(
+                url=v["url"], video_info=v, mode=args.mode, model=args.model,
+                api_key=api_key, lang=args.lang,
+                outdir=dated_outdir,
+                top_n=args.top, db=_db,
+            )
+        finally:
+            _db.close()
+        return result
 
-    for w_url in web_urls:
-        idx += 1
-        print(f"\n[{idx}/{total}]", end="")
-        result = process_web_article(
-            url=w_url, model=args.model, api_key=api_key,
-            outdir=dated_outdir,  # 【改造】日付フォルダを渡す
-            top_n=args.top, db=db,
-        )
-        if result:
-            all_results.append(result)
+    def _process_web(idx_u):
+        idx, w_url = idx_u
+        with _print_lock:
+            print(f"\n[{idx}/{total}] 🌐 {w_url[:60]}")
+        _db = PhraseDB(db_path)
+        try:
+            result = process_web_article(
+                url=w_url, model=args.model, api_key=api_key,
+                outdir=dated_outdir,
+                top_n=args.top, db=_db,
+            )
+        finally:
+            _db.close()
+        return result
+
+    # 並列実行（YouTube動画とWeb記事を同時処理）
+    max_workers = min(4, total) if total > 1 else 1
+    print(f"\n⚡ 並列処理: {max_workers}スレッド")
+
+    futures_map = {}
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        for i, v in enumerate(videos, 1):
+            f = executor.submit(_process_video, (i, v))
+            futures_map[f] = f"video:{v.get('url','')}"
+        for j, w_url in enumerate(web_urls, len(videos) + 1):
+            f = executor.submit(_process_web, (j, w_url))
+            futures_map[f] = f"web:{w_url}"
+
+        for future in as_completed(futures_map):
+            try:
+                result = future.result()
+                if result:
+                    all_results.append(result)
+            except Exception as e:
+                with _print_lock:
+                    print(f"\n  ✗ エラー: {e}")
 
     print("\n" + "=" * 60)
     print(f"✅ {len(all_results)}/{total}件処理完了")
@@ -1639,6 +2419,10 @@ def main():
     for r in all_results:
         if r.get("video_path"): print(f"   🎬 {os.path.basename(r['video_path'])}")
         if r.get("md_path"):    print(f"   📄 {os.path.basename(r['md_path'])}")
+    # 英検1級HTMLファイルも一覧表示
+    import glob as _glob
+    for eiken_f in _glob.glob(os.path.join(dated_outdir, "*_eiken1.html")):
+        print(f"   🎓 {os.path.basename(eiken_f)}")
     print(f"\n🗄  DB: {db_path}")
     print("=" * 60)
     db.close()
