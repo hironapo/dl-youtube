@@ -1738,7 +1738,7 @@ function showSuggestedPhrases(videoId, suggested, list) {
     const row = document.createElement('label');
     row.style.cssText = 'display:flex;align-items:flex-start;gap:7px;padding:4px 2px;cursor:pointer;border-bottom:1px solid var(--border);';
     row.innerHTML = `
-      <input type="checkbox" class="sp-cb" data-idx="${i}" checked style="margin-top:3px;flex-shrink:0">
+      <input type="checkbox" class="sp-cb" data-idx="${i}" style="margin-top:3px;flex-shrink:0">
       <span style="flex:1;min-width:0;">
         <span style="font-size:.8rem;font-weight:700;color:var(--navy)">${mdToHtml(p.en)}</span>
         ${p.ja ? `<span style="font-size:.73rem;color:var(--text-dim);display:block">${esc(p.ja)}</span>` : ''}
@@ -2950,7 +2950,7 @@ async function dlLoadSuggestedPhrases() {
     const row = document.createElement('label');
     row.style.cssText = 'display:flex;align-items:flex-start;gap:8px;padding:5px 12px;cursor:pointer;border-bottom:1px solid var(--border);';
     row.innerHTML = `
-      <input type="checkbox" class="dl-phrase-cb" data-idx="${i}" checked style="margin-top:3px;flex-shrink:0">
+      <input type="checkbox" class="dl-phrase-cb" data-idx="${i}" style="margin-top:3px;flex-shrink:0">
       <span style="flex:1;min-width:0">
         <span style="font-size:.82rem;font-weight:700;color:var(--navy)">${mdToHtml(p.en)}</span>
         ${p.ja ? `<span style="font-size:.75rem;color:var(--text-dim);margin-left:6px">${esc(p.ja)}</span>` : ''}
@@ -2960,8 +2960,8 @@ async function dlLoadSuggestedPhrases() {
     listEl.appendChild(row);
   });
 
-  document.getElementById('dl-phrase-check-all').checked = true;
-  countEl.textContent = `${allPhrases.length}件選択中`;
+  document.getElementById('dl-phrase-check-all').checked = false;
+  countEl.textContent = `0件選択中`;
   reviewEl.style.display = 'block';
 
   // チェックボックス変更時にカウント更新
