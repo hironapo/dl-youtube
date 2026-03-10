@@ -1707,16 +1707,8 @@ async function loadPhrases(videoId) {
     // LLM抽出候補があれば確認ボタンを表示
     const suggested = await apiFetch(`/api/video/${videoId}/suggested_phrases`);
     if (Array.isArray(suggested) && suggested.length) {
-      const wrap = document.createElement('div');
-      wrap.style.cssText = 'padding:12px 8px;display:flex;flex-direction:column;gap:8px;';
-      wrap.innerHTML = `
-        <div style="font-size:.78rem;color:var(--text-muted)">フレーズ未登録</div>
-        <button style="background:var(--navy);border:none;color:#fff;padding:7px 12px;border-radius:4px;
-          font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;text-align:left;">
-          📚 ${suggested.length}件の抽出フレーズを確認・登録
-        </button>`;
-      wrap.querySelector('button').onclick = () => showSuggestedPhrases(videoId, suggested, list);
-      list.appendChild(wrap);
+      // 自動展開
+      showSuggestedPhrases(videoId, suggested, list);
     } else {
       list.innerHTML = '<div class="loading">フレーズなし</div>';
     }
@@ -1745,7 +1737,7 @@ function showSuggestedPhrases(videoId, suggested, list) {
     row.innerHTML = `
       <input type="checkbox" class="sp-cb" data-idx="${i}" checked style="margin-top:3px;flex-shrink:0">
       <span style="flex:1;min-width:0;">
-        <span style="font-size:.8rem;font-weight:700;color:var(--navy)">${esc(p.en)}</span>
+        <span style="font-size:.8rem;font-weight:700;color:var(--navy)">${mdToHtml(p.en)}</span>
         ${p.ja ? `<span style="font-size:.73rem;color:var(--text-dim);display:block">${esc(p.ja)}</span>` : ''}
         ${p.is_top ? '<span style="font-size:.62rem;background:#e8f000;color:#333;border-radius:3px;padding:0 4px;">★</span>' : ''}
       </span>`;
@@ -2957,7 +2949,7 @@ async function dlLoadSuggestedPhrases() {
     row.innerHTML = `
       <input type="checkbox" class="dl-phrase-cb" data-idx="${i}" checked style="margin-top:3px;flex-shrink:0">
       <span style="flex:1;min-width:0">
-        <span style="font-size:.82rem;font-weight:700;color:var(--navy)">${esc(p.en)}</span>
+        <span style="font-size:.82rem;font-weight:700;color:var(--navy)">${mdToHtml(p.en)}</span>
         ${p.ja ? `<span style="font-size:.75rem;color:var(--text-dim);margin-left:6px">${esc(p.ja)}</span>` : ''}
         ${p.is_top ? '<span style="font-size:.65rem;background:#e8f000;color:#333;border-radius:3px;padding:0 4px;margin-left:4px">★</span>' : ''}
       </span>`;

@@ -1529,8 +1529,16 @@ def parse_phrases_from_llm(llm_result: str) -> list[dict]:
 
         m = re.match(r"^[-*]\s*(.+?)\s*\|\s*(.+?)(?:\s*\|\s*(.+))?$", line)
         if m:
+            en_raw = m.group(1).strip()
+            # 「使用例:」「例文:」などのラベル行はスキップ
+            if re.search(r"使用例|例文|例:|example", en_raw, re.IGNORECASE):
+                continue
+            # **ラベル**: や *ラベル*: の形式のプレフィックスを除去
+            en_clean = re.sub(r'^\*{1,2}[^*]+\*{1,2}\s*[:：]\s*', '', en_raw).strip()
+            if not en_clean:
+                continue
             phrases.append({
-                "en": m.group(1).strip(),
+                "en": en_clean,
                 "ja": m.group(2).strip(),
                 "note": (m.group(3) or "").strip(),
                 "is_top": 1 if in_top else 0,
