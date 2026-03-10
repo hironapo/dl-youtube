@@ -309,9 +309,11 @@ def api_all_phrases():
 
         if q:
             like = f'%{q}%'
-            conditions.append('(p.phrase_en LIKE ? OR p.phrase_ja LIKE ? OR p.note LIKE ?)')
-            params_count.extend([like, like, like])
-            params_rows.extend([like, like, like])
+            conditions.append(
+                '(p.phrase_en LIKE ? OR p.phrase_ja LIKE ? OR p.note LIKE ? OR p.explanation LIKE ? OR p.tags LIKE ?)'
+            )
+            params_count.extend([like, like, like, like, like])
+            params_rows.extend([like, like, like, like, like])
 
         if tag:
             tag_like = f'%{tag}%'

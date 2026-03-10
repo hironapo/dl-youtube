@@ -392,6 +392,38 @@ body {
 }
 .vocab-card:hover { border-color: var(--blue); box-shadow: 0 2px 8px rgba(0,85,170,.1); border-top-color: var(--blue); }
 .vocab-card.top { border-top-color: var(--red); }
+
+/* ─── フリップカード（単語帳）─── */
+.flip-card {
+  perspective: 800px; cursor: pointer; height: 120px;
+}
+.flip-card-inner {
+  position: relative; width: 100%; height: 100%;
+  transition: transform .45s cubic-bezier(.4,0,.2,1);
+  transform-style: preserve-3d;
+}
+.flip-card.flipped .flip-card-inner { transform: rotateY(180deg); }
+.flip-card-front, .flip-card-back {
+  position: absolute; width: 100%; height: 100%; backface-visibility: hidden;
+  border-radius: var(--radius); display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 6px; padding: 12px;
+  border: 1.5px solid var(--border); box-sizing: border-box;
+}
+.flip-card-front {
+  background: #fff; border-top: 3px solid var(--navy);
+}
+.flip-card-back {
+  background: var(--lightblue); border-top: 3px solid var(--blue);
+  transform: rotateY(180deg);
+}
+.flip-word-en { font-size: 1.15rem; font-weight: 800; color: var(--navy); text-align: center; }
+.flip-word-ja { font-size: .92rem; font-weight: 600; color: var(--blue); text-align: center; }
+.flip-hint { font-size: .65rem; color: var(--text-muted); }
+.flip-card.top .flip-card-front { border-top-color: var(--red); }
+.flip-actions { display:flex; gap:4px; margin-top:4px; }
+
+/* ─── 単語帳グリッド ─── */
+#vocab-grid.wordbook-mode { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
 .vocab-source { font-size: .7rem; color: var(--text-muted); margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .top-badge {
   display: inline-block; background: var(--red); color: #fff;
@@ -845,6 +877,16 @@ body {
             border:1px solid var(--border);background:#fff;color:var(--text-dim);
             padding:3px 10px;border-radius:12px;font-size:.72rem;cursor:pointer;font-family:inherit">
           📹 この動画
+        </button>
+        <button id="btn-vocab-words" onclick="setVocabFilter('words')" style="
+            border:1px solid var(--border);background:#fff;color:var(--text-dim);
+            padding:3px 10px;border-radius:12px;font-size:.72rem;cursor:pointer;font-family:inherit">
+          📖 単語帳
+        </button>
+        <button id="btn-vocab-phrases" onclick="setVocabFilter('phrases')" style="
+            border:1px solid var(--border);background:#fff;color:var(--text-dim);
+            padding:3px 10px;border-radius:12px;font-size:.72rem;cursor:pointer;font-family:inherit">
+          📝 フレーズ帳
         </button>
       </div>
       <div id="tag-filter-bar">
@@ -1695,7 +1737,7 @@ function makeVocabCard(p) {
 
 function setVocabFilter(mode) {
   state.vocabFilter = mode;
-  ['all','top','current'].forEach(m => {
+  ['all','top','current','words','phrases'].forEach(m => {
     const btn = document.getElementById(`btn-vocab-${m}`);
     if (!btn) return;
     const active = m === mode;
@@ -1703,7 +1745,16 @@ function setVocabFilter(mode) {
     btn.style.color = active ? '#fff' : 'var(--text-dim)';
     btn.style.borderColor = active ? 'var(--blue)' : 'var(--border)';
   });
+  const grid = document.getElementById('vocab-grid');
+  if (mode === 'words') grid.classList.add('wordbook-mode');
+  else grid.classList.remove('wordbook-mode');
   loadVocab();
+}
+
+// phrase_en の語数で単語/フレーズを判定（1〜2語=単語、3語以上=フレーズ）
+function isWord(phraseEn) {
+  const clean = phraseEn.replace(/[*_`]/g, '').trim();
+  return clean.split(/\s+/).length <= 2;
 }
 
 async function loadVocab() {
@@ -1717,18 +1768,35 @@ async function loadVocab() {
   }
   const raw = await apiFetch(url);
   const data = Array.isArray(raw) ? { phrases: raw, total: raw.length } : raw;
-  document.getElementById('vocab-stats').textContent = data.total !== undefined ? `${data.total} フレーズ` : '';
   grid.innerHTML = '';
   if (!data.phrases || !data.phrases.length) {
-    grid.innerHTML = '<div class="loading">フレーズなし。先に dl_youtube_sub_llm.py を実行してください。</div>';
+    grid.innerHTML = '<div class="loading">フレーズなし。</div>';
     return;
   }
 
-  if (state.vocabGroupView) {
+  // 単語帳・フレーズ帳フィルタリング（クライアントサイド）
+  let phrases = data.phrases;
+  if (state.vocabFilter === 'words')   phrases = phrases.filter(p => isWord(p.phrase_en));
+  if (state.vocabFilter === 'phrases') phrases = phrases.filter(p => !isWord(p.phrase_en));
+
+  const label = state.vocabFilter === 'words'   ? `📖 単語帳 ${phrases.length}語`
+              : state.vocabFilter === 'phrases'  ? `📝 フレーズ帳 ${phrases.length}件`
+              : `${data.total ?? phrases.length} フレーズ`;
+  document.getElementById('vocab-stats').textContent = label;
+
+  if (!phrases.length) {
+    grid.innerHTML = '<div class="loading">該当なし</div>';
+    return;
+  }
+
+  if (state.vocabFilter === 'words') {
+    // 単語帳：フリップカード表示
+    phrases.forEach(p => grid.appendChild(makeFlipCard(p)));
+  } else if (state.vocabGroupView) {
     // タグ別グループ表示
     const groups = {};
     const noTag = [];
-    data.phrases.forEach(p => {
+    phrases.forEach(p => {
       const tags = (p.tags || '').split(',').map(t => t.trim()).filter(Boolean);
       if (!tags.length) { noTag.push(p); return; }
       tags.forEach(tag => {
@@ -1752,8 +1820,32 @@ async function loadVocab() {
       noTag.forEach(p => grid.appendChild(makeVocabCard(p)));
     }
   } else {
-    data.phrases.forEach(p => grid.appendChild(makeVocabCard(p)));
+    phrases.forEach(p => grid.appendChild(makeVocabCard(p)));
   }
+}
+
+function makeFlipCard(p) {
+  const expl = p.explanation ? (() => { try { return JSON.parse(p.explanation); } catch { return {}; } })() : {};
+  const div = document.createElement('div');
+  div.className = 'flip-card' + (p.is_top ? ' top' : '');
+  div.innerHTML = `
+    <div class="flip-card-inner">
+      <div class="flip-card-front">
+        <div class="flip-word-en">${esc(p.phrase_en.replace(/[*_]/g,''))}</div>
+        ${expl.etymology ? `<div class="flip-hint">🌱 ${esc(expl.etymology.substring(0,40))}…</div>` : ''}
+        <div class="flip-hint" style="color:#bbb">タップで訳を表示</div>
+      </div>
+      <div class="flip-card-back">
+        <div class="flip-word-ja">${esc(p.phrase_ja || expl.definition_ja || '')}</div>
+        ${expl.mnemonic ? `<div class="flip-hint">🎵 ${esc(expl.mnemonic.substring(0,40))}</div>` : ''}
+        <div class="flip-actions">
+          <button class="phrase-btn ${p.is_top ? 'active' : ''}" onclick="event.stopPropagation();toggleVocabTopById(${p.id},this)">★</button>
+          <button class="phrase-btn" onclick="event.stopPropagation();explainText('${esc(p.phrase_en.replace(/[*_]/g,''))}','')">解説</button>
+        </div>
+      </div>
+    </div>`;
+  div.onclick = () => div.classList.toggle('flipped');
+  return div;
 }
 
 async function loadTags() {
@@ -2184,6 +2276,12 @@ async function toggleVocabTop(e, id, btn) {
   const badge = card.querySelector('.top-badge');
   if (badge) badge.remove();
   else card.querySelector('.phrase-en').insertAdjacentHTML('beforeend', '<span class="top-badge">★</span>');
+}
+
+async function toggleVocabTopById(id, btn) {
+  await apiPost(`/api/phrases/${id}/toggle_top`);
+  btn.classList.toggle('active');
+  btn.closest('.flip-card')?.classList.toggle('top');
 }
 
 async function deleteVocabPhrase(e, id, btn) {
