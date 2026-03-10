@@ -1704,10 +1704,71 @@ async function loadPhrases(videoId) {
   const phrases = await apiFetch(`/api/video/${videoId}/phrases`);
   list.innerHTML = '';
   if (!phrases.length) {
-    list.innerHTML = '<div class="loading">フレーズなし</div>';
+    // LLM抽出候補があれば確認ボタンを表示
+    const suggested = await apiFetch(`/api/video/${videoId}/suggested_phrases`);
+    if (Array.isArray(suggested) && suggested.length) {
+      const wrap = document.createElement('div');
+      wrap.style.cssText = 'padding:12px 8px;display:flex;flex-direction:column;gap:8px;';
+      wrap.innerHTML = `
+        <div style="font-size:.78rem;color:var(--text-muted)">フレーズ未登録</div>
+        <button style="background:var(--navy);border:none;color:#fff;padding:7px 12px;border-radius:4px;
+          font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;text-align:left;">
+          📚 ${suggested.length}件の抽出フレーズを確認・登録
+        </button>`;
+      wrap.querySelector('button').onclick = () => showSuggestedPhrases(videoId, suggested, list);
+      list.appendChild(wrap);
+    } else {
+      list.innerHTML = '<div class="loading">フレーズなし</div>';
+    }
     return;
   }
   phrases.forEach(p => list.appendChild(makePhraseCard(p)));
+}
+
+function showSuggestedPhrases(videoId, suggested, list) {
+  list.innerHTML = '';
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'padding:6px;display:flex;flex-direction:column;gap:4px;';
+
+  const header = document.createElement('div');
+  header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;';
+  header.innerHTML = `
+    <span style="font-size:.75rem;font-weight:700;color:var(--navy)">📚 フレーズ候補 (${suggested.length}件)</span>
+    <label style="font-size:.72rem;color:var(--text-dim);cursor:pointer;display:flex;align-items:center;gap:4px;">
+      <input type="checkbox" id="sp-check-all" checked onchange="document.querySelectorAll('.sp-cb').forEach(c=>c.checked=this.checked)"> 全選択
+    </label>`;
+  wrap.appendChild(header);
+
+  suggested.forEach((p, i) => {
+    const row = document.createElement('label');
+    row.style.cssText = 'display:flex;align-items:flex-start;gap:7px;padding:4px 2px;cursor:pointer;border-bottom:1px solid var(--border);';
+    row.innerHTML = `
+      <input type="checkbox" class="sp-cb" data-idx="${i}" checked style="margin-top:3px;flex-shrink:0">
+      <span style="flex:1;min-width:0;">
+        <span style="font-size:.8rem;font-weight:700;color:var(--navy)">${esc(p.en)}</span>
+        ${p.ja ? `<span style="font-size:.73rem;color:var(--text-dim);display:block">${esc(p.ja)}</span>` : ''}
+        ${p.is_top ? '<span style="font-size:.62rem;background:#e8f000;color:#333;border-radius:3px;padding:0 4px;">★</span>' : ''}
+      </span>`;
+    row._p = p;
+    wrap.appendChild(row);
+  });
+
+  const btn = document.createElement('button');
+  btn.style.cssText = 'margin-top:8px;background:var(--navy);border:none;color:#fff;padding:7px;border-radius:4px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;width:100%;';
+  btn.textContent = '📌 選択した項目を登録';
+  btn.onclick = async () => {
+    const checked = [...wrap.querySelectorAll('.sp-cb:checked')].map(cb => cb.closest('label')._p);
+    if (!checked.length) { alert('選択してください'); return; }
+    const r = await apiPost(`/api/video/${videoId}/register_phrases`, { phrases: checked.map(p => ({en:p.en,ja:p.ja||'',note:p.note||'',is_top:p.is_top||0})) });
+    if (r.success) {
+      showToast(`✅ ${r.inserted}件登録しました`, 'success');
+      loadPhrases(videoId);
+    } else {
+      alert('登録エラー: ' + (r.error || ''));
+    }
+  };
+  wrap.appendChild(btn);
+  list.appendChild(wrap);
 }
 
 // フレーズのテキストからSRT字幕を検索して出現時間を返す
