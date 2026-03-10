@@ -43,8 +43,11 @@ _comment_jobs_lock = threading.Lock()
 # ─────────────────────────────────────────────
 
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=15)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")   # 読み書き並行を許可
+    conn.execute("PRAGMA synchronous=NORMAL") # WAL時の推奨設定
+    conn.execute("PRAGMA busy_timeout=10000") # 10秒待ってからエラー
     return conn
 
 
