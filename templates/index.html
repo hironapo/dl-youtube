@@ -1740,9 +1740,12 @@ function showSuggestedPhrases(videoId, suggested, list) {
     row.innerHTML = `
       <input type="checkbox" class="sp-cb" data-idx="${i}" style="margin-top:3px;flex-shrink:0">
       <span style="flex:1;min-width:0;">
-        <span style="font-size:.8rem;font-weight:700;color:var(--navy)">${mdToHtml(p.en)}</span>
+        <span style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">
+          <span style="font-size:.8rem;font-weight:700;color:var(--navy)">${mdToHtml(p.en)}</span>
+          ${levelBadge(p.level)}
+          ${p.is_top ? '<span style="font-size:.62rem;background:#e8f000;color:#333;border-radius:3px;padding:0 4px;">★</span>' : ''}
+        </span>
         ${p.ja ? `<span style="font-size:.73rem;color:var(--text-dim);display:block">${esc(p.ja)}</span>` : ''}
-        ${p.is_top ? '<span style="font-size:.62rem;background:#e8f000;color:#333;border-radius:3px;padding:0 4px;">★</span>' : ''}
       </span>`;
     row._p = p;
     wrap.appendChild(row);
@@ -2631,6 +2634,20 @@ function esc(str) {
     .replace(/'/g,'&#39;');
 }
 
+// 難易度バッジHTML
+function levelBadge(level) {
+  const cfg = {
+    '初級':     { bg: '#e8f5e9', color: '#2e7d32', border: '#a5d6a7' },
+    '中級':     { bg: '#e3f2fd', color: '#1565c0', border: '#90caf9' },
+    '英検準1級': { bg: '#fff3e0', color: '#e65100', border: '#ffcc80' },
+    '英検1級':  { bg: '#fce4ec', color: '#880e4f', border: '#f48fb1' },
+  };
+  if (!level || !cfg[level]) return '';
+  const c = cfg[level];
+  return `<span style="font-size:.62rem;font-weight:700;padding:1px 6px;border-radius:10px;
+    background:${c.bg};color:${c.color};border:1px solid ${c.border};white-space:nowrap">${level}</span>`;
+}
+
 // マークダウン → HTML（**bold**, *italic*, 改行）
 function mdToHtml(str) {
   return esc(str)
@@ -2952,9 +2969,12 @@ async function dlLoadSuggestedPhrases() {
     row.innerHTML = `
       <input type="checkbox" class="dl-phrase-cb" data-idx="${i}" style="margin-top:3px;flex-shrink:0">
       <span style="flex:1;min-width:0">
-        <span style="font-size:.82rem;font-weight:700;color:var(--navy)">${mdToHtml(p.en)}</span>
-        ${p.ja ? `<span style="font-size:.75rem;color:var(--text-dim);margin-left:6px">${esc(p.ja)}</span>` : ''}
-        ${p.is_top ? '<span style="font-size:.65rem;background:#e8f000;color:#333;border-radius:3px;padding:0 4px;margin-left:4px">★</span>' : ''}
+        <span style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">
+          <span style="font-size:.82rem;font-weight:700;color:var(--navy)">${mdToHtml(p.en)}</span>
+          ${levelBadge(p.level)}
+          ${p.is_top ? '<span style="font-size:.65rem;background:#e8f000;color:#333;border-radius:3px;padding:0 4px;">★</span>' : ''}
+        </span>
+        ${p.ja ? `<span style="font-size:.75rem;color:var(--text-dim);display:block">${esc(p.ja)}</span>` : ''}
       </span>`;
     row._phraseData = p;
     listEl.appendChild(row);

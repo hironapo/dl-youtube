@@ -509,9 +509,55 @@ def _parse_phrases_from_llm(llm_result: str) -> list[dict]:
     _sys.path.insert(0, OUTDIR)
     try:
         from dl_youtube_sub_llm import parse_phrases_from_llm
-        return parse_phrases_from_llm(llm_result)
+        phrases = parse_phrases_from_llm(llm_result)
     except Exception:
         return []
+    # levelが空の場合はヒューリスティックで判定
+    for p in phrases:
+        if not p.get('level'):
+            p['level'] = _heuristic_level(p.get('en', ''), p.get('is_top', 0))
+    return phrases
+
+
+# 英検1級ヒューリスティック判定用キーワード
+_EIKEN1_PATTERNS = re.compile(
+    r'\b(in disguise|at the helm|by dint of|come to grips|get wind of'
+    r'|par excellence|sine qua non|coup de|carte blanche|vis-à-vis'
+    r'|conspicuous|ostentatious|propitious|ameliorate|venerate|exacerbate'
+    r'|obfuscate|perfunctory|inveterate|egregious|fastidious|sycophant'
+    r'|ephemeral|tenacious|precocious|recalcitrant|magnanimous|perspicacious'
+    r'|serendipitous?|nonchalant|sanguine|voluminous|supercilious)\b',
+    re.IGNORECASE
+)
+_EIKEN_P1_PATTERNS = re.compile(
+    r'\b(on the verge|come to terms|take for granted|catch on|pull off'
+    r'|blessing in disguise|go out of one\'?s way|make ends meet'
+    r'|turn a blind eye|once in a blue moon|bite the bullet)\b',
+    re.IGNORECASE
+)
+
+def _heuristic_level(phrase_en: str, is_top: int) -> str:
+    """英語フレーズの難易度をヒューリスティックで推定"""
+    clean = re.sub(r'[*_`]', '', phrase_en).strip().lower()
+    words = clean.split()
+    word_count = len(words)
+
+    # 英検1級パターン一致
+    if _EIKEN1_PATTERNS.search(clean):
+        return '英検1級'
+    # 英検準1級パターン
+    if _EIKEN_P1_PATTERNS.search(clean):
+        return '英検準1級'
+    # is_top=1 かつ複数語は英検1級候補
+    if is_top and word_count >= 2:
+        return '英検1級'
+    # 単語数・長さによる推定
+    avg_len = sum(len(w) for w in words) / max(word_count, 1)
+    if word_count == 1:
+        return '英検1級' if avg_len >= 9 else ('中級' if avg_len >= 6 else '初級')
+    if word_count <= 3:
+        return '英検準1級' if avg_len >= 6 else '中級'
+    return '英検準1級' if avg_len >= 5 else '中級'
 
 
 @app.route('/api/video/<video_id>/suggested_phrases')

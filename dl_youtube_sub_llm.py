@@ -925,7 +925,13 @@ def build_prompt(subtitles: dict[str, str], title: str, url: str,
 
 ## タスク2: 英文フレーズリスト
 字幕に含まれる重要な英語フレーズ・表現をすべて抽出し、以下の形式でリストにしてください：
-- 英語フレーズ | 和訳 | 使用場面・ニュアンスの簡単な説明
+- 英語フレーズ | 和訳 | 難易度(初級/中級/英検準1級/英検1級) | 使用場面・ニュアンスの簡単な説明
+
+難易度の目安：
+- 初級: 中学〜高校基礎レベルの日常表現
+- 中級: 高校〜大学受験レベル
+- 英検準1級: CEFR B2レベル、やや高度なイディオム・表現
+- 英検1級: CEFR C1以上、ネイティブ的表現・高度なイディオム・専門的語彙
 
 ## タスク3: 特に覚えるべきTOP {top_n} フレーズ
 上記リストの中から特に覚えるべきフレーズを{top_n}つ選び、それぞれについて詳しく説明してください：
@@ -1527,7 +1533,7 @@ def parse_phrases_from_llm(llm_result: str) -> list[dict]:
         if re.search(r"(タスク4|タスク5|タスク6|トピック|関連マップ)", line, re.IGNORECASE):
             in_top = False
 
-        m = re.match(r"^[-*]\s*(.+?)\s*\|\s*(.+?)(?:\s*\|\s*(.+))?$", line)
+        m = re.match(r"^[-*]\s*(.+?)\s*\|\s*(.+?)(?:\s*\|\s*(.+?))?(?:\s*\|\s*(.+))?$", line)
         if m:
             en_raw = m.group(1).strip()
             # 「使用例:」「例文:」などのラベル行はスキップ
@@ -1537,10 +1543,25 @@ def parse_phrases_from_llm(llm_result: str) -> list[dict]:
             en_clean = re.sub(r'^\*{1,2}[^*]+\*{1,2}\s*[:：]\s*', '', en_raw).strip()
             if not en_clean:
                 continue
+            # 難易度フィールドを検出（3番目または4番目の|区切り）
+            g3 = (m.group(3) or "").strip()
+            g4 = (m.group(4) or "").strip()
+            level_map = {"初級": "初級", "中級": "中級", "英検準1級": "英検準1級", "英検1級": "英検1級"}
+            level = ""
+            note = ""
+            if g3 in level_map:
+                level = g3
+                note = g4
+            elif g4 in level_map:
+                level = g4
+                note = g3
+            else:
+                note = g3  # 旧フォーマット互換
             phrases.append({
                 "en": en_clean,
                 "ja": m.group(2).strip(),
-                "note": (m.group(3) or "").strip(),
+                "note": note,
+                "level": level,
                 "is_top": 1 if in_top else 0,
             })
             continue
