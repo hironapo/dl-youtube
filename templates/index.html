@@ -1331,6 +1331,19 @@ async function openVideo(v, itemEl) {
     btnDelete.style.cssText = btnStyle + ';background:var(--red);color:#fff';
     btnDelete.onclick = () => deleteVideo(v.video_id, v.title);
     actionsEl.appendChild(btnDelete);
+  } else {
+    // DB未登録の動画でもURLがあればDL誘導ボタンを表示
+    const badge = document.createElement('span');
+    badge.style.cssText = 'font-size:.7rem;color:var(--warning);padding:2px 8px;border:1px solid var(--warning);border-radius:10px;';
+    badge.textContent = '⚠ DB未登録';
+    actionsEl.appendChild(badge);
+    if (v.url) {
+      const btnDl = document.createElement('button');
+      btnDl.textContent = '📥 DL・登録';
+      btnDl.style.cssText = btnStyle + ';background:var(--navy);color:#fff';
+      btnDl.onclick = () => { document.getElementById('dl-urls').value = v.url; openDlModal(); };
+      actionsEl.appendChild(btnDl);
+    }
   }
 
   document.getElementById('btn-explain-current').disabled = true;
@@ -1737,16 +1750,29 @@ function showSuggestedPhrases(videoId, suggested, list) {
   suggested.forEach((p, i) => {
     const row = document.createElement('label');
     row.style.cssText = 'display:flex;align-items:flex-start;gap:7px;padding:4px 2px;cursor:pointer;border-bottom:1px solid var(--border);';
+    // フレーズ英語部分をクリックで字幕の該当時刻にシーク
+    const t = findPhraseTime(p.en);
+    const seekHint = t !== null ? `▶ ${fmtTime(t)}` : '';
     row.innerHTML = `
       <input type="checkbox" class="sp-cb" data-idx="${i}" style="margin-top:3px;flex-shrink:0">
       <span style="flex:1;min-width:0;">
         <span style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">
-          <span style="font-size:.8rem;font-weight:700;color:var(--navy)">${mdToHtml(p.en)}</span>
+          <span class="sp-en" style="font-size:.8rem;font-weight:700;color:var(--navy);cursor:${t!==null?'pointer':'default'}"
+            title="${t!==null?'クリックでシーク':''}">${mdToHtml(p.en)}</span>
+          ${seekHint ? `<span style="font-size:.62rem;color:var(--blue);opacity:.7">${seekHint}</span>` : ''}
           ${levelBadge(p.level)}
           ${p.is_top ? '<span style="font-size:.62rem;background:#e8f000;color:#333;border-radius:3px;padding:0 4px;">★</span>' : ''}
         </span>
         ${p.ja ? `<span style="font-size:.73rem;color:var(--text-dim);display:block">${esc(p.ja)}</span>` : ''}
       </span>`;
+    // フレーズテキストのクリックでシーク（チェックボックスと独立）
+    if (t !== null) {
+      row.querySelector('.sp-en').addEventListener('click', e => {
+        e.preventDefault(); e.stopPropagation();
+        jumpToTime(t);
+        showPanel('player');
+      });
+    }
     row._p = p;
     wrap.appendChild(row);
   });
