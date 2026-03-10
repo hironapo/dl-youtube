@@ -241,8 +241,8 @@ class PhraseDB:
         self.conn.execute("DELETE FROM phrases WHERE video_id = ?", (video_id,))
         for p in phrases:
             self.conn.execute(
-                "INSERT INTO phrases (video_id, phrase_en, phrase_ja, note, is_top, explanation) VALUES (?,?,?,?,?,?)",
-                (video_id, p.get("en", ""), p.get("ja", ""), p.get("note", ""), p.get("is_top", 0), p.get("explanation", ""))
+                "INSERT INTO phrases (video_id, phrase_en, phrase_ja, note, is_top, explanation, level) VALUES (?,?,?,?,?,?,?)",
+                (video_id, p.get("en", ""), p.get("ja", ""), p.get("note", ""), p.get("is_top", 0), p.get("explanation", ""), p.get("level", ""))
             )
         self.conn.commit()
 
@@ -1533,7 +1533,8 @@ def parse_phrases_from_llm(llm_result: str) -> list[dict]:
         if re.search(r"(タスク4|タスク5|タスク6|トピック|関連マップ)", line, re.IGNORECASE):
             in_top = False
 
-        m = re.match(r"^[-*]\s*(.+?)\s*\|\s*(.+?)(?:\s*\|\s*(.+?))?(?:\s*\|\s*(.+))?$", line)
+        # 箇条書き（- / * / 1. / 2. など）+「|」区切り形式にマッチ
+        m = re.match(r"^(?:[-*]|\d+\.)\s*(.+?)\s*\|\s*(.+?)(?:\s*\|\s*(.+?))?(?:\s*\|\s*(.+))?$", line)
         if m:
             en_raw = m.group(1).strip()
             # 「使用例:」「例文:」などのラベル行はスキップ
@@ -1541,6 +1542,8 @@ def parse_phrases_from_llm(llm_result: str) -> list[dict]:
                 continue
             # **ラベル**: や *ラベル*: の形式のプレフィックスを除去
             en_clean = re.sub(r'^\*{1,2}[^*]+\*{1,2}\s*[:：]\s*', '', en_raw).strip()
+            # **phrase** の前後 ** を除去（太字フレーズそのもの）
+            en_clean = re.sub(r'^\*{1,2}(.+?)\*{1,2}$', r'\1', en_clean).strip()
             if not en_clean:
                 continue
             # 難易度フィールドを検出（3番目または4番目の|区切り）

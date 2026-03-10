@@ -915,6 +915,11 @@ body {
             padding:3px 10px;border-radius:12px;font-size:.72rem;cursor:pointer;font-family:inherit">
           📝 フレーズ帳
         </button>
+        <button id="btn-vocab-eiken1" onclick="setVocabFilter('eiken1')" style="
+            border:1px solid #880e4f;background:#fff;color:#880e4f;
+            padding:3px 10px;border-radius:12px;font-size:.72rem;cursor:pointer;font-family:inherit">
+          🎯 英検1級
+        </button>
       </div>
       <div id="tag-filter-bar">
         <span class="tag-chip active" onclick="setTagFilter('')">すべて</span>
@@ -1717,20 +1722,22 @@ function explainCurrent() {
 async function loadPhrases(videoId) {
   const list = document.getElementById('tab-phrases-content');
   list.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
-  const phrases = await apiFetch(`/api/video/${videoId}/phrases`);
+  const [phrases, suggested] = await Promise.all([
+    apiFetch(`/api/video/${videoId}/phrases`),
+    apiFetch(`/api/video/${videoId}/suggested_phrases`),
+  ]);
   list.innerHTML = '';
-  if (!phrases.length) {
-    // LLM抽出候補があれば確認ボタンを表示
-    const suggested = await apiFetch(`/api/video/${videoId}/suggested_phrases`);
-    if (Array.isArray(suggested) && suggested.length) {
-      // 自動展開
-      showSuggestedPhrases(videoId, suggested, list);
-    } else {
-      list.innerHTML = '<div class="loading">フレーズなし</div>';
-    }
+  if (!phrases.length && !(Array.isArray(suggested) && suggested.length)) {
+    list.innerHTML = '<div class="loading">フレーズなし</div>';
     return;
   }
+  // 登録済みフレーズを表示
   phrases.forEach(p => list.appendChild(makePhraseCard(p)));
+  // 未登録候補がまだあれば下に続けて表示
+  if (Array.isArray(suggested) && suggested.length) {
+    showSuggestedPhrases(videoId, suggested, list);
+    return;
+  }
 }
 
 function showSuggestedPhrases(videoId, suggested, list) {
@@ -1738,52 +1745,86 @@ function showSuggestedPhrases(videoId, suggested, list) {
   const wrap = document.createElement('div');
   wrap.style.cssText = 'padding:6px;display:flex;flex-direction:column;gap:4px;';
 
+  // フィルター関数: 英検1級 かつ フレーズ単位（3語以上）
+  const isPhrase = p => p.en.replace(/[*_`]/g, '').trim().split(/\s+/).length >= 3;
+  const isEiken1 = p => p.level === '英検1級';
+
+  let showAll = false;
+  const filtered = () => showAll ? suggested : suggested.filter(p => isEiken1(p) && isPhrase(p));
+
+  const eiken1Count = suggested.filter(p => isEiken1(p) && isPhrase(p)).length;
+
   const header = document.createElement('div');
-  header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;';
+  header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;flex-wrap:wrap;gap:4px;';
+
+  const renderRows = () => {
+    // 既存のrow要素を削除（header・btn以外）
+    wrap.querySelectorAll('.sp-row').forEach(c => c.remove());
+
+    const items = filtered();
+    const countSpan = header.querySelector('.sp-count');
+    if (countSpan) countSpan.textContent = `📚 英検1級フレーズ (${items.length}件${showAll ? '' : `/${suggested.length}件中`})`;
+
+    items.forEach((p, i) => {
+      const row = document.createElement('div');
+      row.className = 'sp-row';
+      row.style.cssText = 'display:flex;align-items:flex-start;gap:7px;padding:5px 2px;border-bottom:1px solid var(--border);';
+      const t = findPhraseTime(p.en);
+      // チェックボックス部分
+      const cbWrap = document.createElement('label');
+      cbWrap.style.cssText = 'display:flex;align-items:flex-start;padding-top:2px;cursor:pointer;flex-shrink:0;';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox'; cb.className = 'sp-cb'; cb.dataset.idx = i;
+      cbWrap.appendChild(cb);
+      row.appendChild(cbWrap);
+      // テキスト部分
+      const textWrap = document.createElement('div');
+      textWrap.style.cssText = 'flex:1;min-width:0;';
+      const topLine = document.createElement('div');
+      topLine.style.cssText = 'display:flex;align-items:center;gap:5px;flex-wrap:wrap;';
+      const enSpan = document.createElement('span');
+      enSpan.style.cssText = 'font-size:.8rem;font-weight:700;color:var(--navy);';
+      enSpan.innerHTML = mdToHtml(p.en);
+      topLine.appendChild(enSpan);
+      if (t !== null) {
+        const seekBtn = document.createElement('button');
+        seekBtn.style.cssText = 'font-size:.65rem;background:var(--blue);color:#fff;border:none;border-radius:4px;padding:1px 6px;cursor:pointer;font-family:inherit;flex-shrink:0;';
+        seekBtn.textContent = `▶ ${fmtTime(t)}`;
+        seekBtn.title = 'クリックでその場面にジャンプ';
+        seekBtn.addEventListener('click', () => { jumpToTime(t); showPanel('player'); });
+        topLine.appendChild(seekBtn);
+      }
+      topLine.insertAdjacentHTML('beforeend', levelBadge(p.level));
+      textWrap.appendChild(topLine);
+      if (p.ja) {
+        const jaSpan = document.createElement('span');
+        jaSpan.style.cssText = 'font-size:.73rem;color:var(--text-dim);display:block;';
+        jaSpan.textContent = p.ja;
+        textWrap.appendChild(jaSpan);
+      }
+      row.appendChild(textWrap);
+      row._p = p;
+      wrap.insertBefore(row, regBtn);
+    });
+  };
+
   header.innerHTML = `
-    <span style="font-size:.75rem;font-weight:700;color:var(--navy)">📚 フレーズ候補 (${suggested.length}件)</span>
-    <label style="font-size:.72rem;color:var(--text-dim);cursor:pointer;display:flex;align-items:center;gap:4px;">
-      <input type="checkbox" id="sp-check-all" checked onchange="document.querySelectorAll('.sp-cb').forEach(c=>c.checked=this.checked)"> 全選択
-    </label>`;
+    <span class="sp-count" style="font-size:.75rem;font-weight:700;color:var(--navy)">📚 英検1級フレーズ (${eiken1Count}件/${suggested.length}件中)</span>
+    <span style="display:flex;gap:6px;align-items:center;">
+      <button id="sp-toggle-all" style="font-size:.68rem;background:#f5f5f5;border:1px solid var(--border);color:var(--text-dim);padding:2px 7px;border-radius:10px;cursor:pointer;font-family:inherit">全表示</button>
+      <label style="font-size:.72rem;color:var(--text-dim);cursor:pointer;display:flex;align-items:center;gap:4px;">
+        <input type="checkbox" id="sp-check-all" onchange="document.querySelectorAll('.sp-cb').forEach(c=>c.checked=this.checked)"> 全選択
+      </label>
+    </span>`;
   wrap.appendChild(header);
 
-  suggested.forEach((p, i) => {
-    const row = document.createElement('label');
-    row.style.cssText = 'display:flex;align-items:flex-start;gap:7px;padding:4px 2px;cursor:pointer;border-bottom:1px solid var(--border);';
-    // フレーズ英語部分をクリックで字幕の該当時刻にシーク
-    const t = findPhraseTime(p.en);
-    const seekHint = t !== null ? `▶ ${fmtTime(t)}` : '';
-    row.innerHTML = `
-      <input type="checkbox" class="sp-cb" data-idx="${i}" style="margin-top:3px;flex-shrink:0">
-      <span style="flex:1;min-width:0;">
-        <span style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">
-          <span class="sp-en" style="font-size:.8rem;font-weight:700;color:var(--navy);cursor:${t!==null?'pointer':'default'}"
-            title="${t!==null?'クリックでシーク':''}">${mdToHtml(p.en)}</span>
-          ${seekHint ? `<span style="font-size:.62rem;color:var(--blue);opacity:.7">${seekHint}</span>` : ''}
-          ${levelBadge(p.level)}
-          ${p.is_top ? '<span style="font-size:.62rem;background:#e8f000;color:#333;border-radius:3px;padding:0 4px;">★</span>' : ''}
-        </span>
-        ${p.ja ? `<span style="font-size:.73rem;color:var(--text-dim);display:block">${esc(p.ja)}</span>` : ''}
-      </span>`;
-    // フレーズテキストのクリックでシーク（チェックボックスと独立）
-    if (t !== null) {
-      row.querySelector('.sp-en').addEventListener('click', e => {
-        e.preventDefault(); e.stopPropagation();
-        jumpToTime(t);
-        showPanel('player');
-      });
-    }
-    row._p = p;
-    wrap.appendChild(row);
-  });
-
-  const btn = document.createElement('button');
-  btn.style.cssText = 'margin-top:8px;background:var(--navy);border:none;color:#fff;padding:7px;border-radius:4px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;width:100%;';
-  btn.textContent = '📌 選択した項目を登録';
-  btn.onclick = async () => {
-    const checked = [...wrap.querySelectorAll('.sp-cb:checked')].map(cb => cb.closest('label')._p);
+  const regBtn = document.createElement('button');
+  regBtn.style.cssText = 'margin-top:8px;background:var(--navy);border:none;color:#fff;padding:7px;border-radius:4px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;width:100%;';
+  regBtn.textContent = '📌 選択した項目を登録';
+  regBtn.onclick = async () => {
+    const checked = [...wrap.querySelectorAll('.sp-cb:checked')].map(cb => cb.closest('.sp-row')._p).filter(Boolean);
     if (!checked.length) { alert('選択してください'); return; }
-    const r = await apiPost(`/api/video/${videoId}/register_phrases`, { phrases: checked.map(p => ({en:p.en,ja:p.ja||'',note:p.note||'',is_top:p.is_top||0})) });
+    const r = await apiPost(`/api/video/${videoId}/register_phrases`, { phrases: checked.map(p => ({en:p.en,ja:p.ja||'',note:p.note||'',is_top:p.is_top||0,level:p.level||''})) });
     if (r.success) {
       showToast(`✅ ${r.inserted}件登録しました`, 'success');
       loadPhrases(videoId);
@@ -1791,7 +1832,15 @@ function showSuggestedPhrases(videoId, suggested, list) {
       alert('登録エラー: ' + (r.error || ''));
     }
   };
-  wrap.appendChild(btn);
+  wrap.appendChild(regBtn);
+
+  header.querySelector('#sp-toggle-all').addEventListener('click', () => {
+    showAll = !showAll;
+    header.querySelector('#sp-toggle-all').textContent = showAll ? '英検1級のみ' : '全表示';
+    renderRows();
+  });
+
+  renderRows();
   list.appendChild(wrap);
 }
 
@@ -1902,13 +1951,19 @@ function makeVocabCard(p) {
 
 function setVocabFilter(mode) {
   state.vocabFilter = mode;
-  ['all','top','current','words','phrases'].forEach(m => {
+  ['all','top','current','words','phrases','eiken1'].forEach(m => {
     const btn = document.getElementById(`btn-vocab-${m}`);
     if (!btn) return;
     const active = m === mode;
-    btn.style.background = active ? 'var(--blue)' : '#fff';
-    btn.style.color = active ? '#fff' : 'var(--text-dim)';
-    btn.style.borderColor = active ? 'var(--blue)' : 'var(--border)';
+    if (m === 'eiken1') {
+      btn.style.background = active ? '#880e4f' : '#fff';
+      btn.style.color = active ? '#fff' : '#880e4f';
+      btn.style.borderColor = '#880e4f';
+    } else {
+      btn.style.background = active ? 'var(--blue)' : '#fff';
+      btn.style.color = active ? '#fff' : 'var(--text-dim)';
+      btn.style.borderColor = active ? 'var(--blue)' : 'var(--border)';
+    }
   });
   const grid = document.getElementById('vocab-grid');
   if (mode === 'words') grid.classList.add('wordbook-mode');
@@ -1928,6 +1983,7 @@ async function loadVocab() {
   let url = `/api/phrases?page=1&per_page=200&q=${encodeURIComponent(state.vocabQuery)}`;
   if (state.vocabTag) url += `&tag=${encodeURIComponent(state.vocabTag)}`;
   if (state.vocabFilter === 'top') url += '&top_only=1';
+  if (state.vocabFilter === 'eiken1') url += '&level=%E8%8B%B1%E6%A4%9C1%E7%B4%9A';
   if (state.vocabFilter === 'current' && state.currentVideo?.video_id) {
     url = `/api/video/${state.currentVideo.video_id}/phrases`;
   }
@@ -1946,6 +2002,7 @@ async function loadVocab() {
 
   const label = state.vocabFilter === 'words'   ? `📖 単語帳 ${phrases.length}語`
               : state.vocabFilter === 'phrases'  ? `📝 フレーズ帳 ${phrases.length}件`
+              : state.vocabFilter === 'eiken1'   ? `🎯 英検1級 ${phrases.length}件`
               : `${data.total ?? phrases.length} フレーズ`;
   document.getElementById('vocab-stats').textContent = label;
 
@@ -2311,7 +2368,7 @@ async function openPhraseModal(p) {
       <div class="loading" style="padding:12px 0"><div class="spinner"></div>動画情報を取得中…</div>
     </div>
     <div style="display:flex;gap:8px">
-      <button onclick="openVocabDetail(event,'${esc(p.phrase_en)}','${esc(p.note||'')}');closeModal()" style="
+      <button onclick="openVocabDetail(event,'${esc(p.phrase_en)}','${esc(p.note||'')}')" style="
           flex:1;background:var(--navy);border:none;color:#fff;padding:8px;
           border-radius:4px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;
           transition:background .15s">
@@ -2982,14 +3039,19 @@ async function dlLoadSuggestedPhrases() {
   }
   if (!allPhrases.length) return;
 
+  // 英検1級 かつ フレーズ単位（3語以上）のみ
+  const isPhrase = p => p.en.replace(/[*_`]/g, '').trim().split(/\s+/).length >= 3;
+  const filteredPhrases = allPhrases.filter(p => p.level === '英検1級' && isPhrase(p));
+  const displayPhrases = filteredPhrases.length ? filteredPhrases : allPhrases.filter(p => isPhrase(p));
+
   const reviewEl = document.getElementById('dl-phrase-review');
   const listEl   = document.getElementById('dl-phrase-list');
   const countEl  = document.getElementById('dl-phrase-count');
   const titleEl  = document.getElementById('dl-phrase-review-title');
 
-  titleEl.textContent = `📚 抽出されたフレーズ (${allPhrases.length}件)`;
+  titleEl.textContent = `🎯 英検1級フレーズ (${displayPhrases.length}件/${allPhrases.length}件中)`;
   listEl.innerHTML = '';
-  allPhrases.forEach((p, i) => {
+  displayPhrases.forEach((p, i) => {
     const row = document.createElement('label');
     row.style.cssText = 'display:flex;align-items:flex-start;gap:8px;padding:5px 12px;cursor:pointer;border-bottom:1px solid var(--border);';
     row.innerHTML = `
@@ -2998,7 +3060,6 @@ async function dlLoadSuggestedPhrases() {
         <span style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">
           <span style="font-size:.82rem;font-weight:700;color:var(--navy)">${mdToHtml(p.en)}</span>
           ${levelBadge(p.level)}
-          ${p.is_top ? '<span style="font-size:.65rem;background:#e8f000;color:#333;border-radius:3px;padding:0 4px;">★</span>' : ''}
         </span>
         ${p.ja ? `<span style="font-size:.75rem;color:var(--text-dim);display:block">${esc(p.ja)}</span>` : ''}
       </span>`;
@@ -3034,7 +3095,7 @@ async function dlRegisterSelected() {
     const p = row._phraseData;
     const vid = p._video_id;
     if (!byVideo[vid]) byVideo[vid] = [];
-    byVideo[vid].push({ en: p.en, ja: p.ja || '', note: p.note || '', is_top: p.is_top || 0 });
+    byVideo[vid].push({ en: p.en, ja: p.ja || '', note: p.note || '', is_top: p.is_top || 0, level: p.level || '' });
   });
 
   let total = 0;

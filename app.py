@@ -309,6 +309,7 @@ def api_all_phrases():
     q        = request.args.get('q', '').strip()
     top_only = request.args.get('top_only', '0') in ('1', 'true', 'yes')
     tag      = request.args.get('tag', '').strip()
+    level    = request.args.get('level', '').strip()
 
     if not db_exists():
         return jsonify({'phrases': [], 'total': 0})
@@ -335,6 +336,11 @@ def api_all_phrases():
                 conditions.append('p.tags LIKE ?')
                 params_count.append(tag_like)
                 params_rows.append(tag_like)
+
+            if level:
+                conditions.append('p.level = ?')
+                params_count.append(level)
+                params_rows.append(level)
 
             where = ('WHERE ' + ' AND '.join(conditions)) if conditions else ''
 
@@ -443,6 +449,7 @@ def api_create_phrase():
         return jsonify({'error': 'phrase_en は必須です'}), 400
     phrase_ja = (data.get('phrase_ja') or '').strip()
     note      = (data.get('note') or '').strip()
+    level     = (data.get('level') or '').strip()
     video_id  = (data.get('video_id') or '').strip() or '_manual_'  # 手動登録の場合
     is_top    = 1 if data.get('is_top') else 0
     if not db_exists():
@@ -450,8 +457,8 @@ def api_create_phrase():
     try:
         with db_conn() as conn:
             cur = conn.execute(
-                "INSERT INTO phrases (video_id, phrase_en, phrase_ja, note, is_top) VALUES (?,?,?,?,?)",
-                (video_id, phrase_en, phrase_ja, note, is_top)
+                "INSERT INTO phrases (video_id, phrase_en, phrase_ja, note, is_top, level) VALUES (?,?,?,?,?,?)",
+                (video_id, phrase_en, phrase_ja, note, is_top, level)
             )
             conn.commit()
             pid = cur.lastrowid
@@ -602,8 +609,8 @@ def api_register_phrases(video_id):
                 if not en:
                     continue
                 conn.execute(
-                    "INSERT OR IGNORE INTO phrases (video_id, phrase_en, phrase_ja, note, is_top) VALUES (?,?,?,?,?)",
-                    (video_id, en, p.get('ja', ''), p.get('note', ''), int(p.get('is_top', 0)))
+                    "INSERT OR IGNORE INTO phrases (video_id, phrase_en, phrase_ja, note, is_top, level) VALUES (?,?,?,?,?,?)",
+                    (video_id, en, p.get('ja', ''), p.get('note', ''), int(p.get('is_top', 0)), p.get('level', ''))
                 )
                 inserted += 1
             conn.commit()
