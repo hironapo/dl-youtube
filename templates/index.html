@@ -1059,6 +1059,25 @@ body {
           cursor:pointer; font-family:inherit;">
         🔄 動画リストを更新
       </button>
+      <!-- フレーズ候補確認エリア -->
+      <div id="dl-phrase-review" style="display:none;margin-top:12px;border:1px solid var(--border);border-radius:6px;overflow:hidden;">
+        <div style="background:var(--navy);color:#fff;padding:8px 12px;font-size:.78rem;font-weight:700;display:flex;align-items:center;justify-content:space-between;">
+          <span id="dl-phrase-review-title">📚 抽出されたフレーズ</span>
+          <label style="display:flex;align-items:center;gap:5px;font-size:.73rem;cursor:pointer">
+            <input type="checkbox" id="dl-phrase-check-all" onchange="dlToggleAllPhrases(this.checked)"> すべて選択
+          </label>
+        </div>
+        <div id="dl-phrase-list" style="max-height:220px;overflow-y:auto;padding:6px 0;"></div>
+        <div style="padding:8px 12px;border-top:1px solid var(--border);display:flex;gap:8px;align-items:center;">
+          <button onclick="dlRegisterSelected()" style="
+              background:var(--navy);border:none;color:#fff;
+              padding:6px 16px;border-radius:4px;font-size:.78rem;font-weight:700;
+              cursor:pointer;font-family:inherit;">
+            📌 選択した項目を登録
+          </button>
+          <span id="dl-phrase-count" style="font-size:.73rem;color:var(--text-muted)"></span>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -2702,6 +2721,7 @@ document.addEventListener('keydown', e => {
 // ─────────────────────────────────────────────
 let _dlEs = null;
 let _dlJobId = null;
+let _dlSuggestedVideoIds = [];  // DLした動画ID一覧
 
 function openDlModal() {
   document.getElementById('dl-overlay').style.display = 'flex';
@@ -2805,6 +2825,8 @@ async function startDownload() {
         showToast('✅ ダウンロード完了！動画リストを更新しました。', 'success');
         loadDates();
         loadWelcomeStats();
+        // フレーズ候補を読み込む
+        dlLoadSuggestedPhrases();
       } else if (msg.status === 'cancelled') {
         _setBadge('⏹ 停止済み', '#f5f5f5', '#666', '#999');
         showToast('⏹ ダウンロードを停止しました。', 'info');
@@ -2833,6 +2855,95 @@ async function stopDownload() {
     document.getElementById('dl-btn-stop').style.display = 'none';
     document.getElementById('dl-status-badge').textContent = '停止中…';
   }
+}
+
+// ─────────────────────────────────────────────
+// DL後フレーズ候補確認
+// ─────────────────────────────────────────────
+async function dlLoadSuggestedPhrases() {
+  // 最近追加された動画（直近24時間）からフレーズ候補を取得
+  const dates = await apiFetch('/api/dates');
+  if (!dates || !dates.length) return;
+
+  // 最新の日付の動画を取得
+  const latestDate = dates[0].date;
+  const videos = await apiFetch(`/api/dates/${latestDate}/videos`);
+  if (!videos || !videos.length) return;
+
+  let allPhrases = [];
+  _dlSuggestedVideoIds = [];
+  for (const v of videos.slice(0, 5)) {
+    if (!v.video_id) continue;
+    const phrases = await apiFetch(`/api/video/${v.video_id}/suggested_phrases`);
+    if (Array.isArray(phrases) && phrases.length) {
+      phrases.forEach(p => p._video_id = v.video_id);
+      allPhrases = allPhrases.concat(phrases);
+      _dlSuggestedVideoIds.push(v.video_id);
+    }
+  }
+  if (!allPhrases.length) return;
+
+  const reviewEl = document.getElementById('dl-phrase-review');
+  const listEl   = document.getElementById('dl-phrase-list');
+  const countEl  = document.getElementById('dl-phrase-count');
+  const titleEl  = document.getElementById('dl-phrase-review-title');
+
+  titleEl.textContent = `📚 抽出されたフレーズ (${allPhrases.length}件)`;
+  listEl.innerHTML = '';
+  allPhrases.forEach((p, i) => {
+    const row = document.createElement('label');
+    row.style.cssText = 'display:flex;align-items:flex-start;gap:8px;padding:5px 12px;cursor:pointer;border-bottom:1px solid var(--border);';
+    row.innerHTML = `
+      <input type="checkbox" class="dl-phrase-cb" data-idx="${i}" checked style="margin-top:3px;flex-shrink:0">
+      <span style="flex:1;min-width:0">
+        <span style="font-size:.82rem;font-weight:700;color:var(--navy)">${esc(p.en)}</span>
+        ${p.ja ? `<span style="font-size:.75rem;color:var(--text-dim);margin-left:6px">${esc(p.ja)}</span>` : ''}
+        ${p.is_top ? '<span style="font-size:.65rem;background:#e8f000;color:#333;border-radius:3px;padding:0 4px;margin-left:4px">★</span>' : ''}
+      </span>`;
+    row._phraseData = p;
+    listEl.appendChild(row);
+  });
+
+  document.getElementById('dl-phrase-check-all').checked = true;
+  countEl.textContent = `${allPhrases.length}件選択中`;
+  reviewEl.style.display = 'block';
+
+  // チェックボックス変更時にカウント更新
+  listEl.addEventListener('change', () => {
+    const checked = listEl.querySelectorAll('.dl-phrase-cb:checked').length;
+    countEl.textContent = `${checked}件選択中`;
+  });
+}
+
+function dlToggleAllPhrases(checked) {
+  document.querySelectorAll('.dl-phrase-cb').forEach(cb => cb.checked = checked);
+  const total = document.querySelectorAll('.dl-phrase-cb').length;
+  document.getElementById('dl-phrase-count').textContent = `${checked ? total : 0}件選択中`;
+}
+
+async function dlRegisterSelected() {
+  const checked = [...document.querySelectorAll('.dl-phrase-cb:checked')];
+  if (!checked.length) { alert('登録するフレーズを選択してください'); return; }
+
+  // video_id ごとにまとめて登録
+  const byVideo = {};
+  checked.forEach(cb => {
+    const row = cb.closest('label');
+    const p = row._phraseData;
+    const vid = p._video_id;
+    if (!byVideo[vid]) byVideo[vid] = [];
+    byVideo[vid].push({ en: p.en, ja: p.ja || '', note: p.note || '', is_top: p.is_top || 0 });
+  });
+
+  let total = 0;
+  for (const [vid, phrases] of Object.entries(byVideo)) {
+    const r = await apiPost(`/api/video/${vid}/register_phrases`, { phrases });
+    if (r.inserted) total += r.inserted;
+  }
+
+  document.getElementById('dl-phrase-review').style.display = 'none';
+  showToast(`✅ ${total}件のフレーズを登録しました`, 'success');
+  loadVocab?.();
 }
 
 // ─────────────────────────────────────────────

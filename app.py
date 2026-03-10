@@ -500,6 +500,73 @@ def api_delete_all_phrases():
 
 
 # ─────────────────────────────────────────────
+# フレーズ候補（LLM抽出・未登録）API
+# ─────────────────────────────────────────────
+
+def _parse_phrases_from_llm(llm_result: str) -> list[dict]:
+    """llm_result テキストからフレーズ候補を抽出（DB登録なし）"""
+    import sys as _sys
+    _sys.path.insert(0, OUTDIR)
+    try:
+        from dl_youtube_sub_llm import parse_phrases_from_llm
+        return parse_phrases_from_llm(llm_result)
+    except Exception:
+        return []
+
+
+@app.route('/api/video/<video_id>/suggested_phrases')
+def api_suggested_phrases(video_id):
+    """動画のllm_resultからフレーズ候補を返す（DB未登録のもののみ）"""
+    if not db_exists():
+        return jsonify([])
+    try:
+        with db_conn() as conn:
+            row = conn.execute(
+                "SELECT llm_result FROM videos WHERE video_id=?", (video_id,)
+            ).fetchone()
+            if not row or not row['llm_result']:
+                return jsonify([])
+            # 既登録フレーズ（このvideoのもの）
+            existing = {r['phrase_en'] for r in conn.execute(
+                "SELECT phrase_en FROM phrases WHERE video_id=?", (video_id,)
+            ).fetchall()}
+
+        phrases = _parse_phrases_from_llm(row['llm_result'])
+        # 未登録のみ返す
+        result = [p for p in phrases if p['en'] not in existing]
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/video/<video_id>/register_phrases', methods=['POST'])
+def api_register_phrases(video_id):
+    """選択したフレーズをDBに一括登録"""
+    if not db_exists():
+        return jsonify({'error': 'DB not found'}), 500
+    data = request.json or {}
+    phrases = data.get('phrases', [])  # [{en, ja, note, is_top}, ...]
+    if not phrases:
+        return jsonify({'error': 'phrases is empty'}), 400
+    try:
+        with db_conn() as conn:
+            inserted = 0
+            for p in phrases:
+                en = (p.get('en') or '').strip()
+                if not en:
+                    continue
+                conn.execute(
+                    "INSERT OR IGNORE INTO phrases (video_id, phrase_en, phrase_ja, note, is_top) VALUES (?,?,?,?,?)",
+                    (video_id, en, p.get('ja', ''), p.get('note', ''), int(p.get('is_top', 0)))
+                )
+                inserted += 1
+            conn.commit()
+        return jsonify({'success': True, 'inserted': inserted})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ─────────────────────────────────────────────
 # プリフェッチ API
 # ─────────────────────────────────────────────
 
