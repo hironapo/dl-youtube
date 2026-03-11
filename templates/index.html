@@ -213,21 +213,21 @@ body {
 .sub-line {
   display: grid;
   grid-template-columns: 40px 1fr 1fr 28px 22px;
-  align-items: start; gap: 6px;
+  align-items: center; gap: 6px;
   padding: 5px 8px; border-radius: var(--radius-sm);
   cursor: pointer; border-left: 3px solid transparent;
   transition: background .1s;
 }
 .sub-line:hover { background: var(--bg-hover); }
 .sub-line.current { background: var(--lightblue); border-left-color: var(--navy); }
-.sub-time { font-size: .7rem; color: var(--text-muted); flex-shrink: 0; margin-top: 2px; font-family: monospace; }
+.sub-time { font-size: .7rem; color: var(--text-muted); flex-shrink: 0; margin-top: 2px; font-family: monospace; user-select: none; -webkit-user-select: none; }
 .sub-body { min-width: 0; }
 .sub-text { font-size: .83rem; color: var(--text-dim); line-height: 1.45; }
 .sub-line.current .sub-text { color: var(--navy); font-weight: 600; }
 .sub-ja {
   font-size: .76rem; color: #5577aa; line-height: 1.45;
   border-left: 2px solid var(--border); padding-left: 6px;
-  min-width: 0;
+  min-width: 0; user-select: none; -webkit-user-select: none;
 }
 .sub-line.current .sub-ja { color: var(--blue); border-left-color: var(--blue); }
 .sub-difficulty {
@@ -245,6 +245,7 @@ body {
   color: var(--text-muted); width: 20px; height: 20px; border-radius: 50%;
   font-size: .75rem; cursor: pointer; line-height: 1; padding: 0;
   transition: all .15s; display: flex; align-items: center; justify-content: center;
+  user-select: none; -webkit-user-select: none;
 }
 .sub-line:hover .sub-add-btn { opacity: 1; }
 .sub-add-btn:hover { background: var(--navy); color: #fff; border-color: var(--navy); }
@@ -1011,8 +1012,8 @@ body {
         <select id="dl-lang" style="
             width:100%; border:1px solid #a0b8d0; border-radius:4px;
             padding:7px 10px; font-size:.83rem; color:#1a2a3a; outline:none; background:#fff;">
-          <option value="en">英語のみ</option>
-          <option value="en,ja" selected>英語＋日本語（推奨）</option>
+          <option value="en" selected>英語のみ（推奨）</option>
+          <option value="en,ja">英語＋日本語</option>
           <option value="ja">日本語のみ</option>
         </select>
       </div>

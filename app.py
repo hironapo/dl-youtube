@@ -1226,8 +1226,8 @@ def api_download():
     mode        = data.get('mode', 'both')     # both / video / sub
     model       = data.get('model', 'deepseek/deepseek-chat')
     top_n       = str(data.get('top_n', 3))
-    lang        = data.get('lang', 'en,ja')
-    auto_phrases = data.get('auto_phrases', False)  # デフォルトOFF
+    lang        = data.get('lang', 'en')
+    auto_phrases = data.get('auto_phrases', True)   # デフォルトON
 
     cmd = ['python3', SCRIPT] + urls + [
         f'--{mode}',
@@ -1385,6 +1385,9 @@ def api_explain():
         )
         resp.raise_for_status()
         content = resp.json()['choices'][0]['message']['content']
+        # markdownコードブロックを除去
+        content = re.sub(r'^```(?:json)?\s*', '', content.strip(), flags=re.IGNORECASE)
+        content = re.sub(r'\s*```$', '', content.strip())
         try:
             return jsonify(json.loads(content))
         except json.JSONDecodeError:
