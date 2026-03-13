@@ -790,6 +790,15 @@ body {
           <span style="font-size:.68rem;color:var(--text-muted);font-weight:700;border-left:2px solid var(--border);padding-left:6px">日本語</span>
           <span></span>
         </div>
+        <!-- ループコントロール -->
+        <div id="loop-bar" style="display:flex;align-items:center;gap:6px;padding:4px 8px;background:#f0f4f8;border-bottom:1px solid var(--border);flex-shrink:0;flex-wrap:wrap">
+          <button id="btn-loop-all" onclick="toggleLoopAll()" style="font-size:.7rem;padding:2px 8px;border-radius:10px;border:1px solid var(--border-mid);background:#fff;cursor:pointer;font-family:inherit">🔁 全体</button>
+          <button id="btn-loop-a" onclick="setLoopA()" style="font-size:.7rem;padding:2px 8px;border-radius:10px;border:1px solid var(--border-mid);background:#fff;cursor:pointer;font-family:inherit">A 始点</button>
+          <span id="loop-a-label" style="font-size:.68rem;color:var(--blue);font-family:monospace"></span>
+          <button id="btn-loop-b" onclick="setLoopB()" style="font-size:.7rem;padding:2px 8px;border-radius:10px;border:1px solid var(--border-mid);background:#fff;cursor:pointer;font-family:inherit">B 終点</button>
+          <span id="loop-b-label" style="font-size:.68rem;color:var(--blue);font-family:monospace"></span>
+          <button id="btn-loop-clear" onclick="clearLoop()" style="font-size:.7rem;padding:2px 8px;border-radius:10px;border:1px solid var(--border-mid);background:#fff;cursor:pointer;font-family:inherit;color:var(--text-muted)">✕ 解除</button>
+        </div>
         <div id="subtitle-scroll"></div>
       </div>
 
@@ -1095,8 +1104,8 @@ body {
     align-items:center; justify-content:center;">
   <div id="add-phrase-modal" style="
       background:#fff; border-top:4px solid var(--navy);
-      border-radius:6px; padding:24px; width:min(480px,94vw);
-      max-height:80vh; overflow-y:auto; position:relative;
+      border-radius:6px; padding:24px; width:min(680px,96vw);
+      max-height:90vh; overflow-y:auto; position:relative;
       box-shadow:0 8px 32px rgba(0,20,50,.2);">
     <button onclick="closeAddPhraseModal()" style="position:absolute;top:12px;right:14px;background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:1.1rem">✕</button>
     <h3 style="font-size:.92rem;font-weight:700;color:var(--navy);margin-bottom:16px">📌 フレーズを登録</h3>
@@ -1113,7 +1122,7 @@ body {
       </div>
       <div>
         <label style="font-size:.73rem;font-weight:700;color:var(--navy);display:block;margin-bottom:3px">メモ・解説</label>
-        <textarea id="ap-note" rows="2" style="width:100%;border:1px solid var(--border-mid);border-radius:4px;padding:7px 10px;font-size:.84rem;outline:none;font-family:inherit;color:var(--text);resize:vertical"
+        <textarea id="ap-note" rows="6" style="width:100%;border:1px solid var(--border-mid);border-radius:4px;padding:7px 10px;font-size:.84rem;outline:none;font-family:inherit;color:var(--text);resize:vertical"
           placeholder="使い方・ニュアンスなど"></textarea>
       </div>
       <div style="display:flex;align-items:center;gap:8px">
@@ -1176,6 +1185,9 @@ const state = {
   selectedModel: 'anthropic/claude-3-haiku',
   showSubJa: false,
   _lastClickedSubIdx: -1,
+  loopMode: null,   // null | 'all' | 'range'
+  loopA: null,
+  loopB: null,
 };
 
 const video = document.getElementById('video-player');
@@ -1611,8 +1623,56 @@ function renderSubtitleList() {
 // ─────────────────────────────────────────────
 // 字幕同期
 // ─────────────────────────────────────────────
+// ループコントロール
+// ─────────────────────────────────────────────
+function toggleLoopAll() {
+  if (state.loopMode === 'all') {
+    state.loopMode = null;
+    video.loop = false;
+  } else {
+    state.loopMode = 'all';
+    state.loopA = null; state.loopB = null;
+    video.loop = true;
+  }
+  updateLoopUI();
+}
+function setLoopA() {
+  state.loopA = video.currentTime;
+  if (state.loopMode !== 'range') { state.loopMode = 'range'; video.loop = false; }
+  updateLoopUI();
+}
+function setLoopB() {
+  state.loopB = video.currentTime;
+  if (state.loopMode !== 'range') { state.loopMode = 'range'; video.loop = false; }
+  updateLoopUI();
+}
+function clearLoop() {
+  state.loopMode = null; state.loopA = null; state.loopB = null;
+  video.loop = false;
+  updateLoopUI();
+}
+function updateLoopUI() {
+  const btnAll = document.getElementById('btn-loop-all');
+  const btnA = document.getElementById('btn-loop-a');
+  const btnB = document.getElementById('btn-loop-b');
+  const lblA = document.getElementById('loop-a-label');
+  const lblB = document.getElementById('loop-b-label');
+  btnAll.style.background = state.loopMode === 'all' ? 'var(--navy)' : '#fff';
+  btnAll.style.color = state.loopMode === 'all' ? '#fff' : '';
+  const rangeOn = state.loopMode === 'range';
+  btnA.style.background = rangeOn && state.loopA != null ? '#e8f0fe' : '#fff';
+  btnB.style.background = rangeOn && state.loopB != null ? '#e8f0fe' : '#fff';
+  lblA.textContent = state.loopA != null ? fmtTime(state.loopA) : '';
+  lblB.textContent = state.loopB != null ? fmtTime(state.loopB) : '';
+}
+
+// ─────────────────────────────────────────────
 function syncSubtitles() {
   const t = video.currentTime;
+  // A-Bループチェック
+  if (state.loopMode === 'range' && state.loopA != null && state.loopB != null && state.loopB > state.loopA) {
+    if (t >= state.loopB) { video.currentTime = state.loopA; return; }
+  }
   const useJaOnly = !state.subtitlesEN.length && state.subtitlesJA.length > 0;
   const subs = dedupeSliding(useJaOnly ? state.subtitlesJA : state.subtitlesEN);
   if (!subs.length) return;
@@ -2563,22 +2623,26 @@ async function loadComments(videoId) {
     popup.appendChild(btnRegSel);
     div.appendChild(popup);
 
-    textDiv.addEventListener('mouseup', () => {
-      const sel = window.getSelection();
-      const selected = sel ? sel.toString().trim() : '';
-      if (selected.length > 1) {
-        const range = sel.getRangeAt(0);
-        const rect = range.getBoundingClientRect();
-        const pRect = div.getBoundingClientRect();
-        popup.style.display = 'flex';
-        popup.style.left = (rect.left - pRect.left) + 'px';
-        popup.style.top = (rect.top - pRect.top - 36) + 'px';
-        btnExplainSel.onclick = (e) => { e.stopPropagation(); popup.style.display='none'; explainText(selected, c.text); };
-        btnRegSel.onclick = (e) => { e.stopPropagation(); popup.style.display='none'; openAddPhraseModal(null, selected); };
-      } else {
-        popup.style.display = 'none';
-      }
+    textDiv.addEventListener('mouseup', (e) => {
+      e.stopPropagation();
+      setTimeout(() => {
+        const sel = window.getSelection();
+        const selected = sel ? sel.toString().trim() : '';
+        if (selected.length > 1) {
+          const range = sel.getRangeAt(0);
+          const rect = range.getBoundingClientRect();
+          const pRect = div.getBoundingClientRect();
+          popup.style.display = 'flex';
+          popup.style.left = (rect.left - pRect.left) + 'px';
+          popup.style.top = (rect.top - pRect.top - 36) + 'px';
+          btnExplainSel.onclick = (e) => { e.stopPropagation(); popup.style.display='none'; explainText(selected, c.text); };
+          btnRegSel.onclick = (e) => { e.stopPropagation(); popup.style.display='none'; openAddPhraseModal(null, selected); };
+        } else {
+          popup.style.display = 'none';
+        }
+      }, 10);
     });
+    popup.addEventListener('mousedown', (e) => e.stopPropagation());
 
     const actions = document.createElement('div');
     actions.className = 'phrase-actions';
@@ -2602,8 +2666,9 @@ async function loadComments(videoId) {
     div.appendChild(likes);
     div.appendChild(actions);
 
-    // ポップアップを閉じる
-    div.addEventListener('click', () => { popup.style.display = 'none'; });
+    document.addEventListener('mousedown', (e) => {
+      if (!popup.contains(e.target)) popup.style.display = 'none';
+    }, { capture: true });
 
     el.appendChild(div);
   });
