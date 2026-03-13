@@ -1226,16 +1226,32 @@ function switchTab(name) {
 // ─────────────────────────────────────────────
 // 日付ツリー
 // ─────────────────────────────────────────────
+let _loadDatesRetryTimer = null;
 async function loadDates() {
   const tree = document.getElementById('date-tree');
   tree.innerHTML = '<div class="loading"><div class="spinner"></div>読み込み中…</div>';
   let dates = await apiFetch('/api/dates');
   if (!dates || !dates.length) {
+    // アプリ起動直後はリトライ（最大10秒）
+    if (!_loadDatesRetryTimer) {
+      let retries = 0;
+      _loadDatesRetryTimer = setInterval(async () => {
+        retries++;
+        const d = await apiFetch('/api/dates');
+        if ((d && d.length) || retries >= 5) {
+          clearInterval(_loadDatesRetryTimer);
+          _loadDatesRetryTimer = null;
+          if (d && d.length) loadDates();
+        }
+      }, 2000);
+    }
     tree.innerHTML = '<div class="loading" style="flex-direction:column;text-align:center;gap:6px">'
       + '<span style="color:var(--text-dim)">動画なし</span>'
       + '<span style="font-size:.72rem;color:var(--text-muted)">URLからダウンロードしてください</span></div>';
     return;
   }
+  clearInterval(_loadDatesRetryTimer);
+  _loadDatesRetryTimer = null;
 
   // フィルター適用
   if (_currentFilter === 'today') {
