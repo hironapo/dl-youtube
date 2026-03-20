@@ -18,9 +18,9 @@
 │                     ブラウザ (SPA)                           │
 │  templates/index.html                                        │
 │  ┌─────────────┐  ┌──────────────┐  ┌────────────────────┐  │
-│  │ サイドバー   │  │ プレイヤー   │  │ タブエリア         │  │
-│  │ (動画ツリー) │  │ (YouTube     │  │ (字幕/フレーズ/    │  │
-│  │             │  │  Embed)      │  │  解説/コメント)    │  │
+│  │ サイドバー   │  │ プレイヤー   │  │ 右パネル(タブ)     │  │
+│  │ (動画ツリー) │  │ (YouTube     │  │ 字幕/フレーズ/     │  │
+│  │             │  │  Embed)      │  │ 解説/学習/コメント  │  │
 │  └─────────────┘  └──────────────┘  └────────────────────┘  │
 └───────────────────────────┬─────────────────────────────────┘
                             │ HTTP / SSE (Server-Sent Events)
@@ -59,10 +59,10 @@
 │ ローカルファイルシステム      │
 │ ~/python/dl-youtube/        │
 │   YYYYMMDD/                 │
-│     <video_id>.mp4          │
-│     <video_id>.en.srt       │
-│     <video_id>.ja.srt       │
-│     <video_id>.md           │
+│     <title>.mp4             │
+│     <title>.en.srt          │
+│     <title>.ja.srt          │
+│     <title>_phrases.md      │
 └─────────────────────────────┘
 ```
 
@@ -74,11 +74,14 @@
 
 #### `GET /api/dates`
 
-登録済み動画の日付一覧を返す。
+登録済み動画の日付一覧を返す。DBとファイルシステムの両方を参照する。
 
 **レスポンス例:**
 ```json
-["20260310", "20260309", "20260308"]
+[
+  { "date": "20260321", "display": "2026/03/21", "count": 4 },
+  { "date": "20260310", "display": "2026/03/10", "count": 3 }
+]
 ```
 
 ---
@@ -95,10 +98,12 @@
 [
   {
     "video_id": "dQw4w9WgXcQ",
-    "title": "Rick Astley - Never Gonna Give You Up",
-    "channel": "RickAstleyVEVO",
+    "title": "Video Title",
+    "channel": "ChannelName",
     "duration": 212,
-    "created_at": "2026-03-10T12:00:00"
+    "mp4": "20260321/title.mp4",
+    "en_srt": "srt/dQw4w9WgXcQ/en",
+    "ja_srt": "srt/dQw4w9WgXcQ/ja"
   }
 ]
 ```
@@ -108,14 +113,6 @@
 #### `DELETE /api/video/<video_id>`
 
 動画をDBおよびファイルシステムから完全削除する（関連フレーズ・コメントも削除）。
-
-**パスパラメータ:**
-- `video_id`: YouTube動画ID
-
-**レスポンス例:**
-```json
-{ "status": "deleted" }
-```
 
 ---
 
@@ -130,12 +127,15 @@
 [
   {
     "id": 1,
-    "phrase_en": "give up",
+    "video_id": "dQw4w9WgXcQ",
+    "phrase_en": "**give up**",
     "phrase_ja": "諦める",
     "note": "",
-    "tags": "動詞句",
-    "is_top": true,
-    "created_at": "2026-03-10T12:00:00"
+    "tags": "動詞句,英検1級",
+    "is_top": 1,
+    "explanation": "{...json...}",
+    "level": "英検1級",
+    "created_at": "2026-03-21 12:00:00"
   }
 ]
 ```
@@ -144,27 +144,21 @@
 
 #### `GET /api/phrases`
 
-全フレーズ一覧を返す。クエリパラメータでフィルタリング可能。
+全フレーズ一覧を返す。ページネーション・フィルタリング対応。
 
 **クエリパラメータ（任意）:**
-- `tag`: タグでフィルタ
-- `video_id`: 動画IDでフィルタ
+- `page`: ページ番号（デフォルト: 1）
+- `per_page`: 1ページあたりの件数（デフォルト: 200）
 - `q`: キーワード検索
+- `tag`: タグでフィルタ
+- `top_only`: `1` でお気に入りのみ
+- `level`: レベルでフィルタ（例: `英検1級`）
 
----
-
-#### `POST /api/phrases`
-
-フレーズを新規登録する。
-
-**リクエストボディ:**
+**レスポンス例:**
 ```json
 {
-  "video_id": "dQw4w9WgXcQ",
-  "phrase_en": "give up",
-  "phrase_ja": "諦める",
-  "note": "Never gonna give you up の give up",
-  "tags": "動詞句"
+  "phrases": [...],
+  "total": 128
 }
 ```
 
@@ -174,33 +168,73 @@
 
 登録済みタグ一覧を返す。
 
-**レスポンス例:**
+---
+
+#### `POST /api/video/<video_id>/register_phrases`
+
+フレーズを一括登録する。
+
+**リクエストボディ:**
 ```json
-["動詞句", "名詞", "形容詞", "イディオム"]
+{
+  "phrases": [
+    { "en": "give up", "ja": "諦める", "note": "", "is_top": 0, "level": "" }
+  ]
+}
 ```
+
+---
+
+#### `PATCH /api/phrases/<id>`
+
+フレーズを更新する（phrase_ja, note, tags, level）。
+
+---
+
+#### `DELETE /api/phrases/<id>`
+
+フレーズを1件削除する。
+
+---
+
+#### `DELETE /api/phrases/all`
+
+全フレーズを削除する。
+
+---
+
+#### `POST /api/phrases/<id>/toggle_top`
+
+フレーズのお気に入りフラグをトグルする。
 
 ---
 
 #### `POST /api/phrases/prefetch`
 
-指定フレーズの解説をLLMで事前生成・DBにキャッシュする。
+解説が未取得のフレーズに対してLLMで一括プリフェッチを開始する（バックグラウンド実行）。
 
-**リクエストボディ:**
+**レスポンス例:**
 ```json
-{ "phrase_ids": [1, 2, 3] }
+{ "job_id": "abc123", "total": 15 }
 ```
+
+---
+
+#### `GET /api/phrases/prefetch/<job_id>`
+
+プリフェッチジョブの進捗を返す。
 
 ---
 
 #### `POST /api/explain`
 
-フレーズの解説をLLMでリアルタイム生成する。
+フレーズ・センテンスの解説をLLMでリアルタイム生成する。DBキャッシュを優先参照し、ヒットしない場合のみOpenRouterを呼び出してDBに保存する。
 
 **リクエストボディ:**
 ```json
 {
-  "phrase": "give up",
-  "context": "Never gonna give you up, never gonna let you down",
+  "text": "give up",
+  "context": "Never gonna give you up",
   "model": "anthropic/claude-3-haiku"
 }
 ```
@@ -208,16 +242,17 @@
 **レスポンス例:**
 ```json
 {
-  "definition": "To stop trying; to abandon an effort",
-  "definition_ja": "努力をやめる、諦める",
-  "etymology": "古英語 'giefan'（与える）+ 'up'（上へ）から転じて「手放す」の意",
-  "linguistics_note": "句動詞。give up + 名詞 / give + 名詞 + up の2通りの語順が可能",
+  "meaning": "努力をやめる、諦める。手放す意味。",
+  "usage": "give up + 名詞 / give + 名詞 + up の2通りの語順が可能",
+  "etymology": "古英語 giefan（与える）+ up（上へ）から転じて「手放す」",
+  "linguistics_note": "句動詞。認知言語学的に「上方向への解放」イメージスキーマ",
   "story": "大切なものを「上（up）に向かって差し出す（give）」イメージ",
   "mnemonic": "ギブアップ＝ギブ（給）して上（up）に逃げる",
-  "example": "Don't give up on your dreams.",
-  "example_ja": "夢を諦めないで。",
-  "related": ["give in", "give out", "surrender"],
-  "eiken_note": "英検1級では surrender / abandon と同義で出題されることが多い"
+  "example": "Despite adversity, she refused to give up her aspirations.",
+  "example_ja": "逆境にもかかわらず、彼女は夢を諦めなかった。",
+  "related": ["relinquish", "forsake", "capitulate", "abdicate"],
+  "eiken_note": "英検1級では surrender / abandon と同義で出題されることが多い",
+  "level": "上級"
 }
 ```
 
@@ -227,7 +262,7 @@
 
 #### `GET /api/srt/<video_id>/<lang>`
 
-指定動画・言語の字幕をJSON配列で返す。
+指定動画・言語の字幕をJSON配列で返す。DBのvideo_path→SRTファイル→DBカラムの順でフォールバック。
 
 **パスパラメータ:**
 - `video_id`: YouTube動画ID
@@ -236,28 +271,34 @@
 **レスポンス例:**
 ```json
 [
-  { "index": 1, "start": "00:00:01,000", "end": "00:00:04,000", "text": "Never gonna give you up" },
-  { "index": 2, "start": "00:00:04,500", "end": "00:00:07,000", "text": "Never gonna let you down" }
+  { "start": 1.0, "end": 4.0, "text": "Never gonna give you up" },
+  { "start": 4.5, "end": 7.0, "text": "Never gonna let you down" }
 ]
 ```
 
 ---
 
+#### `GET /api/subtitle/<path:filepath>`
+
+OUTDIRからの相対パスでSRTファイルを取得する。
+
+---
+
 #### `POST /api/video/<video_id>/fetch_en_sub`
 
-指定動画の英語字幕をyt-dlpで取得・DB保存する。
+英語字幕をyt-dlpで取得・DB保存する。
 
 ---
 
 #### `POST /api/video/<video_id>/fetch_ja_sub`
 
-指定動画の日本語字幕をyt-dlpで取得・DB保存する。
+日本語字幕をyt-dlpで取得・DB保存する。
 
 ---
 
 #### `POST /api/fetch_all_ja_subs`
 
-DB登録済みの全動画に対して日本語字幕を一括取得する（バッチ処理）。
+DB登録済みの全動画に対して日本語字幕を一括取得する。
 
 ---
 
@@ -267,30 +308,11 @@ DB登録済みの全動画に対して日本語字幕を一括取得する（バ
 
 指定動画のコメント一覧を返す。
 
-**レスポンス例:**
-```json
-[
-  {
-    "id": 1,
-    "author": "User123",
-    "text": "This song is timeless!",
-    "likes": 42,
-    "explanation": null
-  }
-]
-```
-
 ---
 
 #### `POST /api/video/<video_id>/comments/refresh`
 
-指定動画のコメントをyt-dlpで再取得・DB更新する。
-
----
-
-#### `POST /api/comments/fetch_all`
-
-全動画のコメントを一括取得する（バッチ処理）。
+コメントをyt-dlpで再取得・DB更新する。
 
 ---
 
@@ -299,18 +321,6 @@ DB登録済みの全動画に対して日本語字幕を一括取得する（バ
 #### `GET /api/network`
 
 フレーズネットワークのノードとリンクを返す。
-
-**レスポンス例:**
-```json
-{
-  "nodes": [
-    { "id": "give up", "group": 1, "count": 3 }
-  ],
-  "links": [
-    { "source": "give up", "target": "give in", "type": "synonym", "weight": 0.8 }
-  ]
-}
-```
 
 ---
 
@@ -329,8 +339,11 @@ YouTube動画のダウンロードジョブを開始する。
 **リクエストボディ:**
 ```json
 {
-  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-  "model": "anthropic/claude-3-haiku"
+  "urls": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+  "mode": "both",
+  "model": "anthropic/claude-3-haiku",
+  "lang": "en",
+  "top_n": 20
 }
 ```
 
@@ -343,14 +356,13 @@ YouTube動画のダウンロードジョブを開始する。
 
 #### `GET /api/download/stream/<job_id>`
 
-Server-Sent Events (SSE) でダウンロード進捗をリアルタイムストリーミング配信する。
+Server-Sent Events (SSE) でダウンロード進捗をリアルタイム配信する。
 
-**イベント形式:**
-```
-data: {"type": "log", "message": "Downloading video..."}
-data: {"type": "progress", "percent": 45}
-data: {"type": "done", "video_id": "dQw4w9WgXcQ"}
-```
+---
+
+#### `POST /api/download/cancel/<job_id>`
+
+実行中のダウンロードジョブをキャンセルする。
 
 ---
 
@@ -362,8 +374,6 @@ data: {"type": "done", "video_id": "dQw4w9WgXcQ"}
 
 ---
 
----
-
 ## DBスキーマ詳細
 
 DBファイルパス: `~/youtube_phrases.db`（SQLite）
@@ -371,8 +381,6 @@ DBファイルパス: `~/youtube_phrases.db`（SQLite）
 ---
 
 ### テーブル: `videos`
-
-動画メタデータと字幕・LLM結果を格納する。
 
 | カラム名 | 型 | 説明 |
 |---------|-----|------|
@@ -388,24 +396,25 @@ DBファイルパス: `~/youtube_phrases.db`（SQLite）
 | `md_path` | TEXT | LLM生成Markdownファイルパス |
 | `llm_result` | TEXT | LLM生成フレーズ結果（JSON） |
 | `llm_model` | TEXT | 使用LLMモデル名 |
+| `tags` | TEXT | タグ（カンマ区切り） |
 | `created_at` | DATETIME | 登録日時 |
+| `updated_at` | DATETIME | 更新日時 |
 
 ---
 
 ### テーブル: `phrases`
 
-抽出・登録されたフレーズを格納する。
-
 | カラム名 | 型 | 説明 |
 |---------|-----|------|
 | `id` | INTEGER PRIMARY KEY AUTOINCREMENT | フレーズID |
 | `video_id` | TEXT | 関連動画ID（videos.video_id 参照） |
-| `phrase_en` | TEXT | 英語フレーズ |
+| `phrase_en` | TEXT | 英語フレーズ（markdown記法含む場合あり） |
 | `phrase_ja` | TEXT | 日本語訳 |
 | `note` | TEXT | メモ・補足 |
 | `explanation` | TEXT | LLM生成解説（JSON文字列） |
 | `tags` | TEXT | タグ（カンマ区切り） |
-| `is_top` | BOOLEAN | お気に入りフラグ |
+| `level` | TEXT | レベル（例: 英検1級） |
+| `is_top` | INTEGER | お気に入りフラグ（0/1） |
 | `created_at` | DATETIME | 登録日時 |
 
 ---
@@ -417,16 +426,14 @@ DBファイルパス: `~/youtube_phrases.db`（SQLite）
 | カラム名 | 型 | 説明 |
 |---------|-----|------|
 | `id` | INTEGER PRIMARY KEY AUTOINCREMENT | リンクID |
-| `phrase_a` | TEXT | フレーズA（英語） |
-| `phrase_b` | TEXT | フレーズB（英語） |
+| `phrase_a` | INTEGER | フレーズAのID（phrases.id参照） |
+| `phrase_b` | INTEGER | フレーズBのID（phrases.id参照） |
 | `link_type` | TEXT | 関連タイプ（synonym/antonym/related等） |
 | `weight` | REAL | 関連強度（0.0〜1.0） |
 
 ---
 
 ### テーブル: `video_comments`
-
-動画コメントと解説を格納する。
 
 | カラム名 | 型 | 説明 |
 |---------|-----|------|
@@ -436,31 +443,7 @@ DBファイルパス: `~/youtube_phrases.db`（SQLite）
 | `text` | TEXT | コメント本文 |
 | `likes` | INTEGER | いいね数 |
 | `explanation` | TEXT | コメント内フレーズの解説（JSON） |
-
----
-
-### テーブル: `topics`
-
-動画のトピック・カテゴリを格納する。
-
-| カラム名 | 型 | 説明 |
-|---------|-----|------|
-| `id` | INTEGER PRIMARY KEY AUTOINCREMENT | トピックID |
-| `video_id` | TEXT | 関連動画ID |
-| `topic` | TEXT | トピック名 |
-
----
-
-### テーブル: `video_links`
-
-動画間の関連を格納する。
-
-| カラム名 | 型 | 説明 |
-|---------|-----|------|
-| `id` | INTEGER PRIMARY KEY AUTOINCREMENT | リンクID |
-| `video_a` | TEXT | 動画AのID |
-| `video_b` | TEXT | 動画BのID |
-| `link_type` | TEXT | 関連タイプ |
+| `created_at` | DATETIME | 取得日時 |
 
 ---
 
@@ -475,14 +458,14 @@ DBファイルパス: `~/youtube_phrases.db`（SQLite）
 [POST /api/download]
      │
      ├─→ yt-dlp で動画ダウンロード
-     │         YYYYMMDD/<video_id>.mp4
+     │         YYYYMMDD/<title>.mp4
      │
      ├─→ yt-dlp で英語字幕取得
-     │         YYYYMMDD/<video_id>.en.srt
+     │         YYYYMMDD/<title>.en.srt
      │
      ├─→ LLM (OpenRouter) でフレーズ抽出
      │         字幕テキスト → プロンプト → フレーズリスト
-     │         YYYYMMDD/<video_id>.md
+     │         YYYYMMDD/<title>_phrases.md
      │
      └─→ SQLite に保存
                videos テーブル: メタデータ・字幕・LLM結果
@@ -496,21 +479,32 @@ DBファイルパス: `~/youtube_phrases.db`（SQLite）
      │
      ▼
 [GET /api/srt/<video_id>/en]  ← 英語字幕JSON取得
-[GET /api/srt/<video_id>/ja]  ← 日本語字幕JSON取得（別途取得必要）
+[GET /api/srt/<video_id>/ja]  ← 日本語字幕JSON取得
      │
      ▼
 [ユーザー] 字幕クリック → YouTubeプレイヤーシーク
+[ユーザー] テキスト選択 → ポップアップ → 解説/登録
      │
      ▼
-[POST /api/explain]  ← フレーズクリック時
+[POST /api/explain]  ← フレーズクリック・選択時
      │
-     ├─→ OpenRouter API 呼び出し
+     ├─→ DBキャッシュ確認（phrases.explanation）
+     │     ヒット → DBから返却
+     │     ミス  → OpenRouter API 呼び出し
+     │               → explanation をDBに保存
+     │               → ブラウザに返却
      │
-     └─→ explanation JSON をDBに保存・ブラウザに返却
+     └─→ renderDetail() で語源・ゴロ合わせ等を表示
 
-[POST /api/phrases]  ← 「★登録」ボタン
+[POST /api/video/<video_id>/register_phrases]  ← 「登録」ボタン
      │
      └─→ phrases テーブルに保存
+
+[📄 全文DL ボタン]
+     │
+     ├─→ GET /api/video/<video_id>/phrases  ← 登録フレーズ+解説取得
+     ├─→ state.subtitlesEN / state.subtitlesJA を参照
+     └─→ EN+JA+解説付き Markdown を生成・ダウンロード
 ```
 
 ---
@@ -521,31 +515,33 @@ DBファイルパス: `~/youtube_phrases.db`（SQLite）
 
 ```json
 {
-  "definition": "英語による定義・意味",
-  "definition_ja": "日本語による意味・訳",
-  "etymology": "語源（ラテン語・ギリシャ語・古英語等）",
-  "linguistics_note": "言語学的考察（句動詞・コロケーション・文法的特徴等）",
-  "story": "記憶に残る覚え方ストーリー（日本語）",
-  "mnemonic": "ゴロ合わせ（日本語）",
-  "example": "例文（英語）",
+  "meaning": "意味・説明（日本語・詳しく）",
+  "usage": "使い方・ニュアンス・語法（日本語）",
+  "example": "英検1級レベルの例文（英語）",
   "example_ja": "例文の日本語訳",
-  "related": ["関連語1", "関連語2", "関連語3"],
-  "eiken_note": "英検1級・TOEIC等試験対策メモ"
+  "etymology": "語源・成り立ち（ラテン語/ギリシャ語/古英語の語根・接頭辞・接尾辞の分析）",
+  "linguistics_note": "言語学的考察（音象徴・認知言語学的メタファー・形態素分析・イメージスキーマ）",
+  "story": "覚え方ストーリー（日本語・情景が浮かぶ具体的なエピソード）",
+  "mnemonic": "ゴロ合わせや記憶術（日本語）",
+  "related": ["英検1級レベルの類語・対義語・派生語 最大4つ"],
+  "eiken_note": "英検1級での出題傾向・注意点",
+  "level": "初級/中級/上級"
 }
 ```
 
 | フィールド | 型 | 説明 |
 |-----------|-----|------|
-| `definition` | string | 英語辞書的定義 |
-| `definition_ja` | string | 日本語訳 |
-| `etymology` | string | 語源解説 |
-| `linguistics_note` | string | 言語学的・文法的考察 |
-| `story` | string | 記憶ストーリー（日本語） |
-| `mnemonic` | string | ゴロ合わせ（日本語） |
-| `example` | string | 使用例文（英語） |
+| `meaning` | string | 意味・詳細説明（日本語） |
+| `usage` | string | 使い方・ニュアンス・語法 |
+| `example` | string | 英検1級レベルの例文（英語） |
 | `example_ja` | string | 例文の日本語訳 |
-| `related` | string[] | 関連語・類義語・反義語のリスト |
-| `eiken_note` | string | 試験対策メモ |
+| `etymology` | string | 語源解説（ラテン語・ギリシャ語・古英語等） |
+| `linguistics_note` | string | 言語学的考察（音象徴・認知言語学・形態素分析） |
+| `story` | string | 記憶ストーリー（日本語） |
+| `mnemonic` | string | ゴロ合わせ・記憶術（日本語） |
+| `related` | string[] | 関連語・類義語・反義語（英検1級以上レベル） |
+| `eiken_note` | string | 英検1級試験対策メモ |
+| `level` | string | 難易度（初級/中級/上級） |
 
 ---
 
@@ -558,26 +554,32 @@ DBファイルパス: `~/youtube_phrases.db`（SQLite）
 
 | プロパティ | 型 | 説明 |
 |-----------|----|------|
-| `currentVideoId` | string \| null | 現在選択中の動画ID |
-| `currentTab` | string | アクティブタブ（`subtitles` / `phrases` / `explain` / `comments`） |
-| `subtitlesEn` | array | 英語字幕データ配列 |
-| `subtitlesJa` | array | 日本語字幕データ配列 |
-| `phrases` | array | 現在動画のフレーズ一覧 |
-| `selectedPhrase` | object \| null | 解説表示中のフレーズオブジェクト |
-| `player` | YT.Player | YouTube IFrame Player APIインスタンス |
-| `currentModel` | string | 選択中のLLMモデル識別子 |
-| `filterMode` | string | フィルター（`all` / `top` / `video`） |
-| `networkData` | object | ネットワーク用 nodes・links データ |
-| `sseSource` | EventSource \| null | SSEコネクション（DL進捗用） |
+| `currentVideo` | object \| null | 現在選択中の動画オブジェクト |
+| `subtitlesEN` | array | 英語字幕データ配列 `{start, end, text}` |
+| `subtitlesJA` | array | 日本語字幕データ配列 |
+| `currentSubIdx` | number | 現在ハイライト中の字幕インデックス |
+| `currentSubText` | string | 現在表示中の字幕テキスト |
+| `vocabFilter` | string | ボキャブラリーフィルター（`all`/`top`/`current`/`words`/`phrases`/`eiken1`） |
+| `vocabQuery` | string | ボキャブラリー検索キーワード |
+| `vocabTag` | string | ボキャブラリータグフィルター |
+| `vocabGroupView` | boolean | タグ別グループ表示モード |
+| `vocabDateView` | boolean | 日付別グループ表示モード |
+| `loopState` | object | A-Bループ設定 `{loopAll, loopStart, loopEnd}` |
 
 ### 主要UIイベント
 
 | イベント | 処理 |
 |---------|------|
-| 字幕行クリック（1回目） | `player.seekTo(startTime)` でシーク |
-| 字幕行クリック（2回目） | `player.playVideo()` で再生開始 |
-| フレーズクリック | `POST /api/explain` → 解説パネル表示 |
-| 関連語クリック | 新フレーズとして解説起動（再帰的に呼び出し） |
+| 字幕行クリック（1回目） | `video.currentTime = s.start` でシーク＋一時停止 |
+| 字幕行クリック（2回目） | `video.play()` で再生開始 |
+| `.sw` 単語クリック | `showWordPopup()` → 解説/登録ポップアップ |
+| 字幕テキストドラッグ選択 | `window.getSelection()` → `showWordPopup()` |
+| 解説ボタン | `POST /api/explain` → `renderDetail()` で表示 |
+| 関連語クリック | 新フレーズとして `explainText()` 再帰呼び出し |
 | DLボタン | `POST /api/download` → SSEで進捗受信 |
-| ★登録ボタン | `POST /api/phrases` → フレーズ保存 |
+| 📄 全文ボタン | EN+JA+解説付きMarkdownを生成・DL |
+| ★トグル | `POST /api/phrases/<id>/toggle_top` |
+| 📅 日付別 | `vocabDateView` トグル → 日付グループ表示 |
 | ネットワーク表示 | D3.js force-simulationで描画 |
+| 学習モード（← →） | `studyPrev()` / `studyNext()` でセンテンス移動 |
+| A-Bループ | `setLoopA()` / `setLoopB()` で区間設定 |
