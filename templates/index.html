@@ -788,7 +788,12 @@ body {
           <span></span>
           <span style="font-size:.68rem;color:var(--text-muted);font-weight:700">English</span>
           <span style="font-size:.68rem;color:var(--text-muted);font-weight:700;border-left:2px solid var(--border);padding-left:6px">日本語</span>
-          <span></span>
+          <button onclick="openTranscriptModal()" title="全文ダウンロード" style="
+              background:#fff;border:1px solid var(--border);color:var(--text-dim);
+              padding:2px 7px;border-radius:4px;font-size:.7rem;font-weight:700;
+              cursor:pointer;font-family:inherit;white-space:nowrap">
+            📄 全文
+          </button>
         </div>
         <!-- ループコントロール -->
         <div id="loop-bar" style="display:flex;align-items:center;gap:6px;padding:4px 8px;background:#f0f4f8;border-bottom:1px solid var(--border);flex-shrink:0;flex-wrap:wrap">
@@ -1163,6 +1168,22 @@ body {
       </svg>
     </button>
     <div id="modal-content"></div>
+  </div>
+</div>
+
+<!-- 全文スクリプトモーダル -->
+<div id="transcript-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:10001;align-items:center;justify-content:center">
+  <div style="background:#fff;border-radius:8px;width:92%;max-width:760px;max-height:92vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 8px 40px rgba(0,0,0,.25)">
+    <div style="padding:14px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <span style="font-size:1rem;font-weight:800;color:var(--navy)">📄 全文スクリプト</span>
+      <label style="font-size:.77rem;display:flex;align-items:center;gap:4px;cursor:pointer;color:var(--text-dim)">
+        <input type="checkbox" id="tr-include-expl" checked onchange="renderTranscriptContent()"> 解説含む
+      </label>
+      <div style="flex:1"></div>
+      <button onclick="downloadTranscript()" style="background:var(--navy);border:none;color:#fff;padding:6px 14px;border-radius:4px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit">⬇ DL (.md)</button>
+      <button onclick="closeTranscriptModal()" style="background:#fff;border:1px solid var(--border);color:var(--text-dim);padding:6px 10px;border-radius:4px;font-size:.82rem;cursor:pointer;font-family:inherit">✕</button>
+    </div>
+    <div id="transcript-content" style="overflow-y:auto;padding:20px 24px;flex:1;font-size:.82rem;line-height:1.7;color:var(--text-main)"></div>
   </div>
 </div>
 
@@ -2633,6 +2654,108 @@ function closeModal(e) {
   if (!e || e.target === document.getElementById('modal-overlay')) {
     document.getElementById('modal-overlay').classList.remove('open');
   }
+}
+
+// ─────────────────────────────────────────────
+// 全文スクリプト
+// ─────────────────────────────────────────────
+let _transcriptExplMap = {};
+
+async function openTranscriptModal() {
+  if (!state.subtitlesEN.length) { showToast('字幕がありません', 'error'); return; }
+  const modal = document.getElementById('transcript-modal');
+  modal.style.display = 'flex';
+  const content = document.getElementById('transcript-content');
+  content.innerHTML = '<div class="loading"><div class="spinner"></div>生成中…</div>';
+
+  // フレーズ解説をロード
+  _transcriptExplMap = {};
+  if (state.currentVideo?.video_id) {
+    const phrases = await apiFetch(`/api/video/${state.currentVideo.video_id}/phrases`);
+    if (Array.isArray(phrases)) {
+      phrases.forEach(p => {
+        if (!p.explanation) return;
+        try {
+          const expl = JSON.parse(p.explanation);
+          const key = p.phrase_en.replace(/\*+/g, '').trim().toLowerCase();
+          _transcriptExplMap[key] = { phrase: p.phrase_en.replace(/\*+/g, '').trim(), expl };
+        } catch {}
+      });
+    }
+  }
+  renderTranscriptContent();
+}
+
+function renderTranscriptContent() {
+  const container = document.getElementById('transcript-content');
+  if (!container) return;
+  const subs = state.subtitlesEN;
+  const v = state.currentVideo;
+  const includeExpl = document.getElementById('tr-include-expl')?.checked;
+
+  // Markdown生成
+  const lines = [];
+  lines.push(`# ${v?.title || 'Transcript'}`);
+  if (v?.channel) lines.push(`📺 ${v.channel}`);
+  if (v?.duration) lines.push(`⏱ ${fmtTime(v.duration)}`);
+  lines.push('');
+  lines.push('---');
+  lines.push('');
+
+  subs.forEach(s => {
+    const ja = state.subtitlesJA.find(j => s.start >= j.start && s.start < j.end)
+             || state.subtitlesJA.find(j => Math.abs(j.start - s.start) < 2.0);
+    lines.push(`### ▶ [${fmtTime(s.start)}]`);
+    lines.push(`🇺🇸 **${s.text}**`);
+    if (ja) lines.push(`🇯🇵 ${ja.text}`);
+
+    if (includeExpl) {
+      const sLower = s.text.toLowerCase();
+      Object.entries(_transcriptExplMap).forEach(([key, val]) => {
+        if (sLower.includes(key)) {
+          const expl = val.expl;
+          lines.push('');
+          lines.push(`  📖 **${val.phrase}**`);
+          if (expl.meaning) lines.push(`  > 意味: ${expl.meaning.substring(0, 120)}`);
+          if (expl.etymology) lines.push(`  > 語源: ${expl.etymology.substring(0, 100)}`);
+          if (expl.story) lines.push(`  > 覚え方: ${expl.story.substring(0, 100)}`);
+        }
+      });
+    }
+    lines.push('');
+  });
+
+  window._transcriptMd = lines.join('\n');
+
+  // HTML表示（MDをシンプルにレンダリング）
+  const html = window._transcriptMd
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/^# (.+)$/gm, '<h2 style="font-size:1.05rem;font-weight:800;color:var(--navy);margin:0 0 4px">$1</h2>')
+    .replace(/^### ▶ \[(.+)\]$/gm, '<div style="font-size:.72rem;font-weight:700;color:var(--text-muted);margin:14px 0 2px">▶ $1</div>')
+    .replace(/^🇺🇸 \*\*(.+)\*\*$/gm, '<div style="font-size:.9rem;font-weight:700;color:var(--navy);line-height:1.5">🇺🇸 $1</div>')
+    .replace(/^🇯🇵 (.+)$/gm, '<div style="font-size:.85rem;color:var(--blue);margin-left:20px;line-height:1.5">🇯🇵 $1</div>')
+    .replace(/^  📖 \*\*(.+)\*\*$/gm, '<div style="font-size:.75rem;font-weight:700;color:#c0392b;margin-left:24px;margin-top:4px">📖 $1</div>')
+    .replace(/^  &gt; (.+)$/gm, '<div style="font-size:.73rem;color:var(--text-dim);margin-left:36px;line-height:1.5">$1</div>')
+    .replace(/^---$/gm, '<hr style="border:none;border-top:1px solid var(--border);margin:8px 0">')
+    .replace(/^📺 (.+)$/gm, '<div style="font-size:.82rem;color:var(--text-muted)">📺 $1</div>')
+    .replace(/^⏱ (.+)$/gm, '<div style="font-size:.82rem;color:var(--text-muted)">⏱ $1</div>')
+    .split('\n').map(l => l.startsWith('<') ? l : `<div>${l}</div>`).join('');
+  container.innerHTML = html;
+}
+
+function downloadTranscript() {
+  const text = window._transcriptMd || '';
+  const v = state.currentVideo;
+  const safe = (v?.title || 'transcript').replace(/[^\w\u3040-\u9faf\u4e00-\u9fff]/g, '_').substring(0, 50);
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `${safe}.md`; a.click();
+  URL.revokeObjectURL(url);
+}
+
+function closeTranscriptModal() {
+  document.getElementById('transcript-modal').style.display = 'none';
 }
 
 // ─────────────────────────────────────────────
