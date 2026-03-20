@@ -1391,10 +1391,18 @@ def api_explain():
         try:
             result = json.loads(content)
         except json.JSONDecodeError:
-            result = {'meaning': content}
+            # テキスト内からJSON部分を抽出して再試行
+            m = re.search(r'\{[\s\S]+\}', content)
+            if m:
+                try:
+                    result = json.loads(m.group())
+                except json.JSONDecodeError:
+                    result = {'meaning': content}
+            else:
+                result = {'meaning': content}
 
-        # 取得した解説をDBに保存（phrase_en が一致するレコードを更新）
-        if db_exists() and isinstance(result, dict) and result.get('meaning'):
+        # 取得した解説をDBに保存（proper構造のみ保存。fallback単純テキストは保存しない）
+        if db_exists() and isinstance(result, dict) and result.get('meaning') and len(result) > 1:
             try:
                 expl_json = json.dumps(result, ensure_ascii=False)
                 with db_conn() as conn:

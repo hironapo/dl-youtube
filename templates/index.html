@@ -1586,14 +1586,16 @@ function renderSubtitleList() {
       e.stopPropagation();
       showWordPopup(sw.textContent.replace(/[^\w''-]/g, '').trim() || sw.textContent.trim(), e.clientX, e.clientY, s.text);
     });
-    // フレーズ選択（mouseup）
-    textSpan.addEventListener('mouseup', e => {
+    // フレーズ選択（mouseup）- div全体で受け取りtextSpan内選択を検知
+    div.addEventListener('mouseup', e => {
       setTimeout(() => {
         const sel = window.getSelection();
         const selected = sel ? sel.toString().trim() : '';
         if (selected.length > 1) {
-          e.stopPropagation();
-          showWordPopup(selected, e.clientX, e.clientY, s.text);
+          const anchor = sel.anchorNode;
+          if (anchor && textSpan.contains(anchor)) {
+            showWordPopup(selected, e.clientX, e.clientY, s.text);
+          }
         }
       }, 10);
     });
