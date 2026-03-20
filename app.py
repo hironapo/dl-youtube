@@ -1389,9 +1389,23 @@ def api_explain():
         content = re.sub(r'^```(?:json)?\s*', '', content.strip(), flags=re.IGNORECASE)
         content = re.sub(r'\s*```$', '', content.strip())
         try:
-            return jsonify(json.loads(content))
+            result = json.loads(content)
         except json.JSONDecodeError:
-            return jsonify({'meaning': content})
+            result = {'meaning': content}
+
+        # 取得した解説をDBに保存（phrase_en が一致するレコードを更新）
+        if db_exists() and isinstance(result, dict) and result.get('meaning'):
+            try:
+                expl_json = json.dumps(result, ensure_ascii=False)
+                with db_conn() as conn:
+                    conn.execute(
+                        "UPDATE phrases SET explanation = ? WHERE phrase_en = ? OR REPLACE(REPLACE(phrase_en,'**',''),'*','') = ?",
+                        (expl_json, text, clean_text)
+                    )
+            except Exception:
+                pass
+
+        return jsonify(result)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

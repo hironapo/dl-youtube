@@ -885,6 +885,12 @@ body {
             cursor:pointer;font-family:inherit;white-space:nowrap;flex-shrink:0">
           タグ別
         </button>
+        <button onclick="toggleVocabDateView()" id="btn-date-view" style="
+            background:#fff;border:1px solid var(--border);color:var(--text-dim);
+            padding:6px 12px;border-radius:4px;font-size:.76rem;font-weight:700;
+            cursor:pointer;font-family:inherit;white-space:nowrap;flex-shrink:0">
+          📅 日付別
+        </button>
         <button onclick="clearAllVocab()" style="
             background:#fff;border:1px solid var(--danger);color:var(--danger);
             padding:6px 12px;border-radius:4px;font-size:.76rem;font-weight:700;
@@ -1181,6 +1187,7 @@ const state = {
   vocabQuery: '',
   vocabTag: '',
   vocabGroupView: false,
+  vocabDateView: false,
   vocabFilter: 'all',
   selectedModel: 'anthropic/claude-3-haiku',
   showSubJa: false,
@@ -2118,6 +2125,22 @@ async function loadVocab() {
       grid.appendChild(header);
       noTag.forEach(p => grid.appendChild(makeVocabCard(p)));
     }
+  } else if (state.vocabDateView) {
+    // 日付別グループ表示
+    const groups = {};
+    phrases.forEach(p => {
+      const d = (p.created_at || '').substring(0, 10) || '日付不明';
+      if (!groups[d]) groups[d] = [];
+      groups[d].push(p);
+    });
+    const sortedDates = Object.keys(groups).sort((a, b) => b.localeCompare(a));
+    sortedDates.forEach(date => {
+      const header = document.createElement('div');
+      header.className = 'vocab-group-header';
+      header.textContent = `📅 ${date} (${groups[date].length}件)`;
+      grid.appendChild(header);
+      groups[date].forEach(p => grid.appendChild(makeVocabCard(p)));
+    });
   } else {
     phrases.forEach(p => grid.appendChild(makeVocabCard(p)));
   }
@@ -2172,9 +2195,23 @@ function setTagFilter(tag) {
 
 function toggleVocabGroupView() {
   state.vocabGroupView = !state.vocabGroupView;
+  if (state.vocabGroupView) state.vocabDateView = false;
   const btn = document.getElementById('btn-group-view');
   btn.style.background = state.vocabGroupView ? 'var(--navy)' : '#fff';
   btn.style.color = state.vocabGroupView ? '#fff' : 'var(--text-dim)';
+  const btnD = document.getElementById('btn-date-view');
+  btnD.style.background = '#fff'; btnD.style.color = 'var(--text-dim)';
+  loadVocab();
+}
+
+function toggleVocabDateView() {
+  state.vocabDateView = !state.vocabDateView;
+  if (state.vocabDateView) state.vocabGroupView = false;
+  const btn = document.getElementById('btn-date-view');
+  btn.style.background = state.vocabDateView ? 'var(--navy)' : '#fff';
+  btn.style.color = state.vocabDateView ? '#fff' : 'var(--text-dim)';
+  const btnG = document.getElementById('btn-group-view');
+  btnG.style.background = '#fff'; btnG.style.color = 'var(--text-dim)';
   loadVocab();
 }
 
