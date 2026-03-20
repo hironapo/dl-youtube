@@ -1172,12 +1172,12 @@ body {
 </div>
 
 <!-- 全文スクリプトモーダル -->
-<div id="transcript-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:10001;align-items:center;justify-content:center">
+<div id="transcript-modal" onclick="if(event.target===this)closeTranscriptModal()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:10001;align-items:center;justify-content:center">
   <div style="background:#fff;border-radius:8px;width:92%;max-width:760px;max-height:92vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 8px 40px rgba(0,0,0,.25)">
     <div style="padding:14px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <span style="font-size:1rem;font-weight:800;color:var(--navy)">📄 全文スクリプト</span>
       <label style="font-size:.77rem;display:flex;align-items:center;gap:4px;cursor:pointer;color:var(--text-dim)">
-        <input type="checkbox" id="tr-include-expl" checked onchange="renderTranscriptContent()"> 解説含む
+        <input type="checkbox" id="tr-include-expl" checked onchange="if(window._transcriptMd)renderTranscriptContent()"> 解説含む
       </label>
       <div style="flex:1"></div>
       <button onclick="downloadTranscript()" style="background:var(--navy);border:none;color:#fff;padding:6px 14px;border-radius:4px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit">⬇ DL (.md)</button>
@@ -1607,11 +1607,12 @@ function renderSubtitleList() {
       e.stopPropagation();
       showWordPopup(sw.textContent.replace(/[^\w''-]/g, '').trim() || sw.textContent.trim(), e.clientX, e.clientY, s.text);
     });
-    // フレーズ選択（mouseup）- div全体で受け取りtextSpan内選択を検知
+    // フレーズ選択（mouseup）- Range選択のみ（単語クリックの二重起動を防止）
     div.addEventListener('mouseup', e => {
       setTimeout(() => {
         const sel = window.getSelection();
-        const selected = sel ? sel.toString().trim() : '';
+        if (!sel || sel.type !== 'Range') return;
+        const selected = sel.toString().trim();
         if (selected.length > 1) {
           const anchor = sel.anchorNode;
           if (anchor && textSpan.contains(anchor)) {
@@ -2220,10 +2221,9 @@ function toggleVocabGroupView() {
   state.vocabGroupView = !state.vocabGroupView;
   if (state.vocabGroupView) state.vocabDateView = false;
   const btn = document.getElementById('btn-group-view');
-  btn.style.background = state.vocabGroupView ? 'var(--navy)' : '#fff';
-  btn.style.color = state.vocabGroupView ? '#fff' : 'var(--text-dim)';
+  if (btn) { btn.style.background = state.vocabGroupView ? 'var(--navy)' : '#fff'; btn.style.color = state.vocabGroupView ? '#fff' : 'var(--text-dim)'; }
   const btnD = document.getElementById('btn-date-view');
-  btnD.style.background = '#fff'; btnD.style.color = 'var(--text-dim)';
+  if (btnD) { btnD.style.background = '#fff'; btnD.style.color = 'var(--text-dim)'; }
   loadVocab();
 }
 
@@ -2231,10 +2231,9 @@ function toggleVocabDateView() {
   state.vocabDateView = !state.vocabDateView;
   if (state.vocabDateView) state.vocabGroupView = false;
   const btn = document.getElementById('btn-date-view');
-  btn.style.background = state.vocabDateView ? 'var(--navy)' : '#fff';
-  btn.style.color = state.vocabDateView ? '#fff' : 'var(--text-dim)';
+  if (btn) { btn.style.background = state.vocabDateView ? 'var(--navy)' : '#fff'; btn.style.color = state.vocabDateView ? '#fff' : 'var(--text-dim)'; }
   const btnG = document.getElementById('btn-group-view');
-  btnG.style.background = '#fff'; btnG.style.color = 'var(--text-dim)';
+  if (btnG) { btnG.style.background = '#fff'; btnG.style.color = 'var(--text-dim)'; }
   loadVocab();
 }
 
@@ -2744,7 +2743,8 @@ function renderTranscriptContent() {
 }
 
 function downloadTranscript() {
-  const text = window._transcriptMd || '';
+  if (!window._transcriptMd) { showToast('コンテンツ生成中…', 'info'); return; }
+  const text = window._transcriptMd;
   const v = state.currentVideo;
   const safe = (v?.title || 'transcript').replace(/[^\w\u3040-\u9faf\u4e00-\u9fff]/g, '_').substring(0, 50);
   const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
@@ -3106,6 +3106,9 @@ document.addEventListener('keydown', e => {
       document.getElementById('dl-overlay').style.display = 'none';
       if (_dlEs) { _dlEs.close(); _dlEs = null; }
       return;
+    }
+    if (document.getElementById('transcript-modal').style.display === 'flex') {
+      closeTranscriptModal(); return;
     }
   }
   // 学習モード中のナビ
